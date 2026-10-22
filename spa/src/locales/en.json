@@ -3499,5 +3499,22 @@
   "watch.alert.unreach_host": "Alert when the host is offline",
   "watch.alert.unreach_d": "The current value and changing it wait for the settings API (S9).",
   "watch.alert.unreach_pending": "waiting for the settings API",
-  "watch.look.apply_partial": "{{n}} hosts could not be saved: the store keeps a limited number of looks."
+  "watch.look.apply_partial": "{{n}} hosts could not be saved: the store keeps a limited number of looks.",
+  "watch.wake.err.app_mismatch": "This App and the host are on versions that do not match, so your change was not saved; update the App (or the host) first.",
+  "watch.wake.err.interval": "Use 0, or 1 to 1440 minutes.",
+  "watch.wake.err.max_gap": "Use 1 to 72 hours; it cannot be 0.",
+  "watch.wake.err.below_gb": "Use 1 to 100000 GB.",
+  "watch.wake.err.away_min": "Use 5 to 1440 minutes.",
+  "watch.wake.err.range": "Out of the allowed range.",
+  "watch.wake.err.bad_time": "Write a time as HH:MM (24-hour), e.g. 09:00.",
+  "watch.wake.err.duplicate_time": "That time is already on the list.",
+  "watch.wake.err.too_many_times": "At most 24 times.",
+  "watch.wake.err.too_many_kinds": "At most 32 kinds can be turned off.",
+  "watch.wake.err.bad_level": "A level is push, digest or watcher.",
+  "watch.wake.err.bad_kind": "An alert kind has a name that is not allowed.",
+  "watch.wake.err.prompt_too_long": "Too long: at most 2000 bytes.",
+  "watch.wake.err.prompt_bad_char": "It contains a control character that is not allowed; new lines and tabs are fine.",
+  "watch.wake.err.bad_tz": "The host does not know this time zone.",
+  "watch.wake.err.other": "The host refused this value: {{message}}",
+  "watch.wake.err.not_int": "Enter a whole number."
 }
