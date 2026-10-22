@@ -137,7 +137,7 @@ func TestHandleDaemonRebuild_RefusedRestartPutsThePreviousVersionBack(t *testing
 	if got := readString(t, target); got != "old" {
 		t.Errorf("target = %q, want the old version back", got)
 	}
-	if !strings.Contains(body, "restart_in_progress") || !strings.Contains(body, "已還原上一版") {
+	if !strings.Contains(body, "restart_in_progress") || !strings.Contains(body, "the previous version was put back") {
 		t.Errorf("expected the refusal and the restore note, got:\n%s", body)
 	}
 	if strings.Contains(body, `"type":"restarting"`) {
@@ -157,7 +157,7 @@ func TestHandleDaemonRebuild_RefusedRestartOnFirstInstallJustReportsIt(t *testin
 	}
 	body := postRebuild(t, m)
 
-	if !strings.Contains(body, "restart_in_progress") || strings.Contains(body, "已還原") {
+	if !strings.Contains(body, "restart_in_progress") || strings.Contains(body, "put back") {
 		t.Errorf("expected only the refusal, got:\n%s", body)
 	}
 }

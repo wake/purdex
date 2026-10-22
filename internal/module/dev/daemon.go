@@ -174,9 +174,9 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 			if havePrev {
 				// the daemon keeps running, so the file on disk goes back to the version it is running
 				if rerr := os.Rename(prevPath, finalPath); rerr != nil {
-					msg += "; 還原上一版也失敗: " + rerr.Error()
+					msg += "; putting the previous version back failed too: " + rerr.Error()
 				} else {
-					msg += "; 重啟被拒，已還原上一版"
+					msg += "; the previous version was put back"
 				}
 			}
 			writeEvent(daemonRebuildEvent{Type: "error", Message: msg})
