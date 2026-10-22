@@ -32,7 +32,10 @@ daemon 從 `~/.config/pdx/bin/pdx` 跑時，重建之後 daemon 就跳回 repo�
 - **R4** 取不到執行檔路徑（`os.Executable` 或 `EvalSymlinks` 失敗，或得到空字串）時送 `error` 事件，不建置、不 rename、不重啟，也不在任何地方留下建置產物。**不得退回 repo 路徑**：退回就是本節要修的問題。
 - **R5** 目標不是 `<repo_root>/bin/pdx` 時，不更新也不建立 repo 的 `bin/pdx`。它只是建置產物，runtime 已經沒有東西指向它。
 - **不變**：建置指令、hash 與 version 注入、事件順序（`success` 在 rename 之後）、`daemonRebuildMu`、`/api/dev/daemon/check`。
-- **非目標**：保留上一版執行檔（那是部署流程的事）；Electron App 的 local-daemon 更新流程（`download.go` 的 `bin/dist`）。
+- **R6** 換檔前驗新檔：target 是 daemon、hook、statusline、setup 共用的唯一安裝檔，所以 rename 之前先實際執行 `<target>.new version --json`（10 秒 timeout），要求 exit 0 且 JSON 的 `hash` 等於這次注入的 hash（hash 為空字串時只要求 exit 0 與 JSON 可解）。失敗就送 `error` 事件、刪掉 `.new`、不換檔、不重啟。`DevModule.verifyFn` 為 nil 表示不驗（測試安全的預設），`Init` 設成真的驗證。
+- **R7** 保留上一版：target 是一般檔案時，rename 前先刪掉舊的 `<target>.prev`、再 `os.Link(target, target+".prev")`（同卷 hard link）。link 失敗就送 `error`、刪 `.new`、不換檔：沒有退路就不更新。第一次安裝（target 不存在）略過。`restartFn` 回錯（`restart_unavailable`／`restart_in_progress`／`shutting_down`）時，`os.Rename(<target>.prev, <target>)` 還原，`error` 事件說明「重啟被拒，已還原上一版」；還原也失敗時兩個錯誤都寫出來。成功路徑留下 `.prev`，exec 後新版若起不來，可手動 `mv pdx.prev pdx`。
+- **R8** 任何失敗出口（build、驗證、link、rename）都不留 `<target>.new`。
+- **非目標**：core 的 exec 失敗 fallback；Electron App 的 local-daemon 更新流程（`download.go` 的 `bin/dist`）。
 
 ### 可測性
 

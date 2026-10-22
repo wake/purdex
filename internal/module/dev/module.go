@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -44,6 +45,9 @@ type DevModule struct {
 	// means <repoRoot>/bin/pdx (test-safe default: a test never renames over its
 	// own test executable); Init sets it to runningBinary.
 	selfPathFn func() (string, error)
+	// verifyFn runs the freshly built binary at path before it replaces the installed one and returns an error when it is not a working pdx
+	// of wantHash. Nil means no check (test-safe default: the binaries tests build have no version command); Init sets verifyBinary.
+	verifyFn func(ctx context.Context, path, wantHash string) error
 	// gitHeadFn returns the short hash of HEAD, or "" when unavailable.
 	// Injected by tests; defaulted to m.gitHead in Init.
 	gitHeadFn func() string
@@ -88,6 +92,9 @@ func (m *DevModule) Init(c *core.Core) error {
 	if m.selfPathFn == nil {
 		m.selfPathFn = runningBinary
 	}
+	if m.verifyFn == nil {
+		m.verifyFn = verifyBinary
+	}
 	return nil
 }
 
@@ -99,6 +106,24 @@ func runningBinary() (string, error) {
 		return "", err
 	}
 	return filepath.EvalSymlinks(exe)
+}
+
+// verifyBinary runs `path version --json` and requires exit 0 and JSON output; when wantHash is not empty the JSON's hash must equal it.
+func verifyBinary(ctx context.Context, path, wantHash string) error {
+	out, err := execstat.CommandContext(ctx, "dev.verify-binary", path, "version", "--json").Output()
+	if err != nil {
+		return fmt.Errorf("%s version --json: %w", filepath.Base(path), err)
+	}
+	var info struct {
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return fmt.Errorf("%s version --json printed no JSON: %w", filepath.Base(path), err)
+	}
+	if wantHash != "" && info.Hash != wantHash {
+		return fmt.Errorf("the new binary reports hash %q, the build injected %q", info.Hash, wantHash)
+	}
+	return nil
 }
 
 // rebuildTarget is the file a daemon rebuild replaces. Rebuilding into the repo while the daemon runs from elsewhere (mlab runs

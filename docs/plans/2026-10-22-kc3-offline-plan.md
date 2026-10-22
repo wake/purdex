@@ -58,6 +58,16 @@ spec：`docs/specs/2026-10-22-kc3-offline-spec.md`。一張 PR，分支 `worktre
    - (a) `waitWorkRoot` 失敗時直接回 `false` → 第二個測試要紅；
    - (b) 拿掉 `logEvery` 節流 → 節流測試要紅。
 
+## Task 3：換檔前驗新檔、保留 `.prev`、重啟被拒時還原（spec R6–R8，codex R2 A2／A3）
+
+**檔案**：`internal/module/dev/module.go`、`daemon.go`、`daemon_swap_test.go`
+
+1. `DevModule.verifyFn`（nil 不驗，`Init` 設成 `verifyBinary`）。`verifyBinary` 以 `execstat.CommandContext` 跑 `<path> version --json`，exit 0、JSON 可解、hash 相符（want 為空只要前兩項）。
+2. `handleDaemonRebuild` 順序：build → 驗證（10 秒）→ 刪舊 `.prev`＋`os.Link(target, .prev)`（target 是一般檔案才做）→ rename → `success` → `restartFn`；`restartFn` 回錯就 `os.Rename(.prev, target)` 並在 error 事件註明已還原。build、驗證、link、rename 任一失敗都刪 `.new`。
+3. 測試：驗證失敗（target、`.prev` 不變、無 `.new`、不重啟）；成功（`.prev` 是舊內容、已存在的上上版被取代）；第一次安裝；重啟被拒（還原、事件含說明；第一次安裝只報錯）；link 失敗不換檔；build、rename 失敗無 `.new`；`verifyBinary` 的 hash 相符／不符／exit 非 0／非 JSON／缺檔；`Init` 設了 `verifyFn`。
+4. mutation：拿掉驗證、拿掉 link、拿掉還原、拿掉 `.new` 清理，各自要有測試轉紅。
+5. PR 層另加跑 `./internal/execstat/`（新增子行程呼叫）。
+
 ## PR 層驗證（照 CLAUDE.md「測試分層」）
 
 - 一律走 `pdx test`（沒有對應 task 時用 `pdx test --adhoc -- …`）：`go test ./internal/module/dev/ ./cmd/wwd/`，再加 `make lint`。
