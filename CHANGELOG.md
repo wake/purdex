@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.775] - 2026-10-23
+
+> **守門員的喚醒設定有了自己的文件與 API、`pdx gate` 子命令移除、wwd 的快車道會讓給等太久的佇列工作，以及外接碟（KC3）沒掛時不再出錯。** daemon、`wwd`、**mod** 與 **SPA** 都有改：**部署要重跑 `pdx setup`**（pdx-test、pdx-watch 兩個 skill），**這版要重新打包 Mac App，使用者要更新**。依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變，wire 的 `proto` 仍是 3（facts 多一個選填的 `worker.waiting`）。
+>
+> mlab 的 daemon 自 10-22 起從內建碟的 `~/.config/pdx/bin/pdx` 跑（hook、statusline、mod、codex、opencode 都指向它），部署改成換掉那個檔；wwd 的 `work_root`／`deps_root` 已設到 KC3 上的 `~/Workspace/.cache/wwd/`。新的設定鍵都是選填的（`docs/wwd-deploy.md` §21），這版不用改任何主機的 config。
+
+### Added
+
+- **守門員的喚醒設定文件（WK-1a、WK-1b，#3952、#3955、#3960）**：喚醒設定成為一份有 etag 的文件，第一次啟動時從原本的 `watch` 列遷移過來；來源主機（`[watch] wake_source`，預設 mlab）提供 `GET`／`PUT /api/watch/wake-settings`，capability `watch.wake_settings.v1`；其他主機讀來源主機的那份，回報 `is_source: false` 與 `stale`。叫醒本身還沒改讀它（那是 `watch.wake_rules.v1`，下一階段）。
+- **`pdx watch wake-settings show`／`set` 與 pdx-watch skill 的對應段落（WK-4，#3956）**。
+- **App：主機分頁的守門員模式改成「閒置時休息」開關（WK-5h，#3957）**。
+- **資格狀態的兩軸檢視（WWD-7b2-0a，#3946、#3948）**：wwd 的 `GET /v1/qualification`，以及經本機 wwd 讀的 `GET /api/pool/hosts/{alias}/qualification`（capability `pool.qualify.v1`，裝置 token 可讀）。
+- **快車道讓給等太久的佇列工作（#3950，#3941）**：一台只有一個重名額的主機上，重的快車道執行（`pdx test --adhoc`）會讓給這台 worker 自己會領、已等超過 `fastlane_yield_after_seconds`（預設 300）的佇列工作，超過 `fastlane_yield_max_seconds`（預設 1800）就不再讓；`pdx wwd pool` 會顯示誰在等、快車道是否讓位中。
+
+### Fixed
+
+- **外接碟沒掛時的穩定性（#3965）**：dev 重建改成換掉 daemon 正在跑的那個執行檔（不再固定換 repo 的 `bin/pdx`），換之前先跑一次新檔確認 hash，舊版留成 `pdx.prev`，core 拒絕重啟時換回來；wwd 的工作目錄建不出來時原地等待，不再讓 launchd 每 5 秒重起一次。
+- **queue_unclaimable 要連續 10 分鐘都沒有主機能領才響（#3945，#3941）**。
+- **三個不穩的 Go 測試（#3954，#3949、#3921、#3923）**：pool NothingAfterStop、wwdalerts EveryLevelWakes、agent StuckSubscriber。
+
+### Removed
+
+- **`pdx gate` 子命令（WWD-9 9a-3，#3953）**：舊閘門的入口已在 773 移除，這版把子命令本身拿掉（`pdx gate …` 回 `unknown command: gate`）；pdx-test skill 跟著改寫。
+
+### Changed
+
+- 守門員喚醒設定的 spec v5.1、plan v4.1，以及 App 端的 WK-5 plan（#3951、#3959）。
+
 ## [1.0.0-alpha.774] - 2026-10-21
 
 > **通知標題改由 daemon 的分組標籤決定、wwd 讓快主機先領、主機可以替工作設定位置類的環境變數。** daemon、`wwd`、**mod** 與 **SPA** 都有改：**部署要重跑 `pdx setup`**（守門員 skill 的 disk_falling 段落），**這版要重新打包 Mac App，使用者要更新**。依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3（`/v1/info` 的 worker 多一個選填的 `speed_factor`）。Purdex daemon 多一個 notify 模組，第一次啟動會建立 `notify.db`。
