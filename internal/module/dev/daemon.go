@@ -134,15 +134,26 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	finalPath := target
 	prevPath := target + ".prev"
 	havePrev := false
-	if fi, err := os.Lstat(target); err == nil && fi.Mode().IsRegular() {
-		if err := os.Remove(prevPath); err != nil && !os.IsNotExist(err) {
-			os.Remove(newPath)
-			writeEvent(daemonRebuildEvent{Type: "error", Message: "cannot keep the previous version, nothing was replaced: " + err.Error()})
-			return
+	fi, statErr := os.Lstat(target)
+	if statErr == nil || !os.IsNotExist(statErr) {
+		// the target exists (or cannot be told apart from existing): it has to be a regular file whose inode can be kept
+		reason := ""
+		switch {
+		case statErr != nil:
+			reason = statErr.Error()
+		case !fi.Mode().IsRegular():
+			reason = fmt.Sprintf("%s is not a regular file (mode %s)", target, fi.Mode())
 		}
-		if err := os.Link(target, prevPath); err != nil {
+		if reason == "" {
+			if err := os.Remove(prevPath); err != nil && !os.IsNotExist(err) {
+				reason = err.Error()
+			} else if err := os.Link(target, prevPath); err != nil {
+				reason = err.Error()
+			}
+		}
+		if reason != "" {
 			os.Remove(newPath)
-			writeEvent(daemonRebuildEvent{Type: "error", Message: "cannot keep the previous version, nothing was replaced: " + err.Error()})
+			writeEvent(daemonRebuildEvent{Type: "error", Message: "cannot keep the previous version, nothing was replaced: " + reason})
 			return
 		}
 		havePrev = true

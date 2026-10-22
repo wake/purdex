@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -211,23 +212,62 @@ func TestHandleDaemonRebuild_BuildFailureLeavesNoNewFile(t *testing.T) {
 	}
 }
 
-func TestHandleDaemonRebuild_RenameFailureLeavesNoNewFile(t *testing.T) {
+// A target that is not a regular file (here a non-empty directory) cannot be kept as .prev, so there is no way back: an error, and the
+// directory, the repo and the restart are as they were. (A rename that fails on its own, with the backup made, cannot be built without
+// such a directory, so that path has no test of its own.)
+func TestHandleDaemonRebuild_UnusableTargetEmitsErrorAndReplacesNothing(t *testing.T) {
 	t.Setenv("PDX_DEV_MODE", "1")
 	dir := writeTinyRepo(t, "package main\nfunc main(){}\n")
-	// bin/pdx is a non-empty directory: rename(file -> dir) fails
 	if err := os.MkdirAll(filepath.Join(dir, "bin", "pdx"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "bin", "pdx", "blocker"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	m := &DevModule{repoRoot: dir}
+	before := treeListing(t, filepath.Join(dir, "bin"))
+	n := 0
+	m := &DevModule{repoRoot: dir, restartFn: func(string, string, func()) error { n++; return nil }}
 	body := postRebuild(t, m)
-	if !strings.Contains(body, "rename failed") {
-		t.Errorf("expected rename failure:\n%s", body)
+
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "cannot keep the previous version, nothing was replaced") {
+		t.Errorf("expected the cannot-keep error, got:\n%s", body)
 	}
-	if exists(filepath.Join(dir, "bin", "pdx.new")) {
-		t.Error(".new left behind after a failed rename")
+	if after := treeListing(t, filepath.Join(dir, "bin")); !reflect.DeepEqual(before, after) {
+		t.Errorf("bin changed: before %v, after %v", before, after)
+	}
+	if n != 0 {
+		t.Errorf("restart called %d times", n)
+	}
+}
+
+// A symlink as the target would be renamed over (replacing the link, not its file) with no way back: refused, both left alone.
+func TestHandleDaemonRebuild_SymlinkTargetEmitsErrorAndReplacesNothing(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	dir := writeTinyRepo(t, "package main\nfunc main(){}\n")
+	real := installedPdx(t)
+	link := filepath.Join(t.TempDir(), "pdx")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	m := &DevModule{
+		repoRoot:   dir,
+		selfPathFn: func() (string, error) { return link, nil },
+		restartFn:  func(string, string, func()) error { n++; return nil },
+	}
+	body := postRebuild(t, m)
+
+	if !strings.Contains(body, "cannot keep the previous version, nothing was replaced") {
+		t.Errorf("expected the cannot-keep error, got:\n%s", body)
+	}
+	if got := readString(t, real); got != "old" {
+		t.Errorf("the linked file = %q", got)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the symlink was replaced: %v", err)
+	}
+	if exists(link+".new") || exists(link+".prev") || n != 0 {
+		t.Errorf("leftovers or restart: new %v prev %v restarts %d", exists(link+".new"), exists(link+".prev"), n)
 	}
 }
 
