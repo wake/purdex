@@ -81,12 +81,20 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	}()
 
 	log.Printf("dev rebuild requested by %s (current %s)", r.RemoteAddr, buildinfo.Hash)
-	binDir := filepath.Join(m.repoRoot, "bin")
+	// The target is the binary this daemon runs from, found before anything is built: when it cannot be found the answer is an error, never
+	// the repo's bin/pdx, which is the move away from the running binary this exists to prevent.
+	target, err := m.rebuildTarget()
+	if err != nil {
+		writeEvent(daemonRebuildEvent{Type: "error", Message: "cannot find the running pdx binary: " + err.Error()})
+		return
+	}
+	// The build goes next to the target so the rename below stays on one volume and is atomic.
+	binDir := filepath.Dir(target)
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
-	newPath := filepath.Join(binDir, "pdx.new")
+	newPath := target + ".new"
 
 	// Fix 1: Inject the current git hash via -ldflags so the rebuilt binary
 	// reports the correct buildinfo.Hash through /api/dev/daemon/check. Without
@@ -108,8 +116,8 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	// Fix 3: send success AFTER atomic rename so we don't emit success-then-
 	// error if rename fails. hash was captured before the build (Fix 1/5).
 
-	// Atomic swap: bin/pdx.new -> bin/pdx
-	finalPath := filepath.Join(binDir, "pdx")
+	// Atomic swap: <target>.new -> <target>, where target is the running binary (bin/pdx only when the daemon runs from the repo).
+	finalPath := target
 	if err := os.Rename(newPath, finalPath); err != nil {
 		writeEvent(daemonRebuildEvent{Type: "error", Message: "rename failed: " + err.Error()})
 		return

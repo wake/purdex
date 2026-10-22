@@ -39,6 +39,11 @@ type DevModule struct {
 	// RequestRestart: ordered shutdown, then re-exec). Nil means skip the
 	// restart (test-safe default); Init sets it to the core's.
 	restartFn func(reason, execPath string, afterAccept func()) error
+	// selfPathFn returns the resolved path of the binary this daemon is running
+	// from; a rebuild replaces that file (spec 2026-10-22-kc3-offline §1). Nil
+	// means <repoRoot>/bin/pdx (test-safe default: a test never renames over its
+	// own test executable); Init sets it to runningBinary.
+	selfPathFn func() (string, error)
 	// gitHeadFn returns the short hash of HEAD, or "" when unavailable.
 	// Injected by tests; defaulted to m.gitHead in Init.
 	gitHeadFn func() string
@@ -80,7 +85,36 @@ func (m *DevModule) Init(c *core.Core) error {
 	if m.restartFn == nil {
 		m.restartFn = c.RequestRestart
 	}
+	if m.selfPathFn == nil {
+		m.selfPathFn = runningBinary
+	}
 	return nil
+}
+
+// runningBinary is the file this process was started from, symlinks resolved: the same value `pdx setup` and the hook and statusline
+// installers write into settings. It never falls back to the unresolved path, so a caller can tell "unknown" from "known".
+func runningBinary() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+// rebuildTarget is the file a daemon rebuild replaces. Rebuilding into the repo while the daemon runs from elsewhere (mlab runs
+// ~/.config/pdx/bin/pdx so a missing Workspace volume cannot take it down) would send the next restart, and the next `pdx setup`, back to the repo.
+func (m *DevModule) rebuildTarget() (string, error) {
+	if m.selfPathFn == nil {
+		return filepath.Join(m.repoRoot, "bin", "pdx"), nil
+	}
+	p, err := m.selfPathFn()
+	if err != nil {
+		return "", err
+	}
+	if p == "" {
+		return "", fmt.Errorf("the executable path is empty")
+	}
+	return p, nil
 }
 
 // startBuildLocked transitions the module into building state, allocates a
