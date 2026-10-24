@@ -81,7 +81,7 @@ func (m *Module) acceptAskUnattended(a RelayAsk) (accepted bool) {
 // acceptOpenAsksUnattended accepts every open ask while the switch is on: the switch-on sweep and the liveness tick (an ask that a
 // transient error left open is tried again). Caller holds createMu.
 func (m *Module) acceptOpenAsksUnattended() int {
-	if !m.unattendedOn() {
+	if !m.unattendedOn() || !m.memberAutoOn() {
 		return 0
 	}
 	asks, err := m.store.listOpenAsks(m.now())

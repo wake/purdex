@@ -38,8 +38,23 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	} else if ok {
+		if !m.memberAutoOn() {
+			m.writeMemberAutoOff(w)
+			return
+		}
 		m.askRemote(w, req, row)
 		return
+	}
+	// member_auto off: an active member of a live team is refused; anything else keeps the answer it always had (not_member).
+	if !m.memberAutoOn() {
+		if _, _, isMember, err := m.store.ActiveMemberInLiveTeam(req.SessionID); err != nil {
+			m.logf("[team] relay ask %s: %v", req.RequestID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		} else if isMember {
+			m.writeMemberAutoOff(w)
+			return
+		}
 	}
 	// The same mutex as the lead's relay create: an ask and a `pdx relay` for the same member are strictly ordered
 	// (ask first → the relay accepts it; relay first → the ask is refused relay_open).
@@ -87,6 +102,12 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.notifyAskAsync(ask)
 	}
 	m.writeJSON(w, http.StatusOK, team.RelayAskResponse{ID: ask.ID, State: ask.State, ExpiresAt: ask.ExpiresAt, Replay: replay})
+}
+
+// writeMemberAutoOff is the answer to an ask while relay.member_auto is off. relay_unsupported is the code the mod already
+// treats as "do not ask again for another 10 points" (spec member-relay-switch §2-3).
+func (m *Module) writeMemberAutoOff(w http.ResponseWriter) {
+	m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "member 自動接力已在主機設定關閉 (member automatic relay is off in the host config)", nil)
 }
 
 // notifyAskAsync sends the lead's notice off the request's path; false when the daemon is stopping (notified_at stays 0,
@@ -199,7 +220,7 @@ func (m *Module) acceptOpenAsksOnTick() {
 // retryAskNotices is the sweeper's step (liveness tick): every open ask whose notice has not been delivered is sent
 // again, with the minutes left. The window is not extended.
 func (m *Module) retryAskNotices() {
-	if m.sender == nil || m.stopping() {
+	if m.sender == nil || m.stopping() || !m.memberAutoOn() {
 		return
 	}
 	asks, err := m.store.ListUnnotifiedAsks(m.now())

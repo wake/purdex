@@ -11,7 +11,7 @@ import (
 )
 
 // everySwitch is every setting of the two host switches (spec §8.7 (a)).
-var everySwitch = []hostconfig.RelaySwitches{{SelfSolo: true, SelfLead: true}, {SelfSolo: true}, {SelfLead: true}, {}}
+var everySwitch = []hostconfig.RelaySwitches{{SelfSolo: true, SelfLead: true, MemberAuto: true}, {SelfSolo: true, MemberAuto: true}, {SelfLead: true, MemberAuto: true}, {MemberAuto: true}}
 
 // makeMember makes sid an active member of live team uid(9), led by sid-2.
 func (f *fixture) makeMember(sid string) {
@@ -115,7 +115,7 @@ func TestRelaySelf_OnOffInAMemberIsRefusedStatusSaysMember(t *testing.T) {
 func TestRelayHello_LeadReadsTheLeadSwitch(t *testing.T) {
 	f := newFixture(t)
 	seedTeam(t, f.m.store, uid(9), "sid-1", f.clock.Load())
-	f.switches.set(hostconfig.RelaySwitches{SelfSolo: true, SelfLead: false})
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: true, SelfLead: false, MemberAuto: true})
 	if code, h, body := f.hello("sid-1"); code != http.StatusOK || h.Role != "lead" || h.SelfRelay != "off" {
 		t.Fatalf("lead, self_lead off: %d %s", code, body)
 	}
@@ -127,7 +127,7 @@ func TestRelayHello_LeadReadsTheLeadSwitch(t *testing.T) {
 		t.Fatalf("lead begin, self_lead off: %d %s, want 409 %s", code, body, team.ErrSelfRelayOff)
 	}
 
-	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true})
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true})
 	if code, h, body := f.hello("sid-1"); code != http.StatusOK || h.Role != "lead" || h.SelfRelay != "on" {
 		t.Fatalf("lead, self_lead on: %d %s", code, body)
 	}

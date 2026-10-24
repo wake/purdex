@@ -43,6 +43,10 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a manual compaction is never intercepted", nil)
 			return
 		}
+		if !m.memberAutoOn() { // member_auto off: the mod is told nothing to hold; it asks again by hello (spec member-relay-switch §2-1)
+			m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{Noticed: false, Route: team.InterceptRouteSilent})
+			return
+		}
 		noticed, member := m.interceptedIdle(req.SessionID, req.Period)
 		route := team.InterceptRouteMember
 		if !member {
@@ -89,6 +93,10 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := m.store.DisarmNoticeForce(mr.SpawnOp, mr.SessionID); err != nil {
 		m.logf("[team] compacted %s: %v", req.SessionID, err)
+	}
+	if !m.memberAutoOn() { // the bookkeeping above is done; only the notice to the lead is the automatic help
+		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
+		return
 	}
 	text := fmt.Sprintf(CompactedNoticeFmt, mr.Ref)
 	if req.Trigger == "idle" {

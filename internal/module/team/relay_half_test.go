@@ -102,7 +102,7 @@ func TestHalfBegin_OnlyWithReasonIdle(t *testing.T) {
 // The switch refusals still apply to a half. Mutation gate: skip them for a half → the off host opens one (red).
 func TestHalfBegin_TheSwitchRefusalsApply(t *testing.T) {
 	f := newFixture(t)
-	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true})
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true})
 	code, _, body := f.beginRaw2(halfBeginReq("sid-1", true))
 	if code != http.StatusConflict || !strings.Contains(string(body), team.ErrSelfRelayOff) {
 		t.Fatalf("half on an off host: %d %s, want 409 self_relay_off", code, body)

@@ -90,6 +90,12 @@ type Module struct {
 	// relay_unsupported, P8a-1a's modPresent() reads it for the
 	// terminal-only degradation; nothing else writes it.
 	switches hostconfig.RelaySwitchReader
+	// memberAutoLog throttles the log of an unreadable member_auto switch: one line per distinct error per memberAutoLogEvery.
+	memberAutoLog struct {
+		mu  sync.Mutex
+		msg string
+		at  time.Time
+	}
 	// prompts is the relay prompt bodies (host config, spec §8.8), read
 	// on every GET /api/relay/prompts.
 	prompts hostconfig.RelayPromptReader

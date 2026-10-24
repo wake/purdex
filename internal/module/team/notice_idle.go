@@ -58,6 +58,7 @@ func (m *Module) noticeIdle() {
 		m.logf("[team] idle notice: %v", err)
 		return
 	}
+	autoOn := m.memberAutoOn() // off: the idle periods are still kept; only the claim and the send are skipped
 	now := m.now()
 	after := int64(m.idleMinutes) * 60_000
 	live := make(map[string]struct{}, len(members))
@@ -80,6 +81,9 @@ func (m *Module) noticeIdle() {
 		}
 		if m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) {
 			continue // the relay (or the member's own ask) is the answer
+		}
+		if !autoOn {
+			continue
 		}
 		gen, won := m.claimIdleTold(mr.SessionID)
 		if !won {
