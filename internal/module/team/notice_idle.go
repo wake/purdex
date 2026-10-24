@@ -58,6 +58,7 @@ func (m *Module) noticeIdle() {
 		m.logf("[team] idle notice: %v", err)
 		return
 	}
+	autoOn := m.memberAutoOn() // off: the idle periods are still kept; only the claim and the send are skipped
 	now := m.now()
 	after := int64(m.idleMinutes) * 60_000
 	live := make(map[string]struct{}, len(members))
@@ -81,6 +82,9 @@ func (m *Module) noticeIdle() {
 		if m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) {
 			continue // the relay (or the member's own ask) is the answer
 		}
+		if !autoOn {
+			continue
+		}
 		gen, won := m.claimIdleTold(mr.SessionID)
 		if !won {
 			continue // this idle period is already told
@@ -98,7 +102,7 @@ func (m *Module) noticeIdle() {
 // or the period may have ended, since the check; then nothing is sent, and a period that is still the same is given back.
 // A send that fails is not retried (advisory: the lead still sees CTX in `pdx team`).
 func (m *Module) idleNotice(mr memberRow, pct, minutes int, gen uint64) {
-	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) {
+	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) || !m.memberAutoOn() {
 		m.releaseIdleTold(mr.SessionID, gen)
 		return
 	}

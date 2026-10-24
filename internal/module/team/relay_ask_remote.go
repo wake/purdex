@@ -61,6 +61,11 @@ func (m *Module) askRemote(w http.ResponseWriter, req team.RelayAskRequest, row 
 		return
 	}
 	m.createMu.Lock()
+	if !m.memberAutoOn() { // the final gate, under the lock that orders the write (the capability read above can take seconds)
+		m.createMu.Unlock()
+		m.writeMemberAutoOff(w)
+		return
+	}
 	now := m.now()
 	ask, replay, err := m.store.CreateRemoteRelayAsk(RelayAsk{ID: req.RequestID, SessionID: req.SessionID, UsedPct: req.UsedPct, Window: req.Window,
 		CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000}, row.LeadHostID)

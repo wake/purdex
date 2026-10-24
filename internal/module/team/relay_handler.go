@@ -51,8 +51,36 @@ func (m *Module) relayRole(sessionID string) (string, error) {
 	return roleNone, nil
 }
 
+// memberAutoLogEvery is how often the same unreadable-switch error is logged again.
+const memberAutoLogEvery = 10 * time.Minute
+
+// memberAutoOn says whether the automatic relay help for members is on for this host (relay.member_auto, spec
+// 2026-10-24 member-relay-switch). It reads the switch on every call. A switch that cannot be read counts as off (fail
+// closed, like the self switches): nothing is intercepted or told, compaction simply runs. No reader at all is on.
+func (m *Module) memberAutoOn() bool {
+	if m.switches == nil {
+		return true
+	}
+	sw, err := m.switches.RelaySwitches()
+	if err == nil {
+		return sw.MemberAuto
+	}
+	msg := err.Error()
+	now := time.Now()
+	m.memberAutoLog.mu.Lock()
+	quiet := msg == m.memberAutoLog.msg && now.Sub(m.memberAutoLog.at) < memberAutoLogEvery
+	if !quiet {
+		m.memberAutoLog.msg, m.memberAutoLog.at = msg, now
+	}
+	m.memberAutoLog.mu.Unlock()
+	if !quiet {
+		m.logf("[team] member_auto unreadable, treated as off: %v", err)
+	}
+	return false
+}
+
 // selfRelayState is a session's role and effective self-relay state (spec
-// §8.7), from one role read: a member is off with no switch (U13);
+// §8.7), from one role read: a member is off with no self switch (U13; its automatic help has relay.member_auto, see memberAutoOn);
 // otherwise the host switch for the role, then the session's pause.
 // hostSwitch is the switch that applied (false for a member, which has none).
 func (m *Module) selfRelayState(sessionID string) (role, state string, hostSwitch bool, err error) {
@@ -123,7 +151,9 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
 		IdleMinutes: team.RelayIdleMinutes, IdleThreshold: team.RelayIdleThresholdPct,
-		IdleIntercept: team.IdleInterceptMembers,
+	}
+	if m.memberAutoOn() {
+		resp.IdleIntercept = team.IdleInterceptMembers
 	}
 	if h, ok, err := m.store.FreshHalfOf(req.SessionID); err != nil {
 		m.logf("[team] relay hello %s: fresh half: %v", req.SessionID, err)

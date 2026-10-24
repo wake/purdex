@@ -48,6 +48,9 @@ func (m *Module) acceptAskUnattended(a RelayAsk) (accepted bool) {
 	if !ok {
 		return false // the member left: the sweeper withdraws the ask
 	}
+	if !m.memberAutoOn() { // the final gate (member_auto): read after the lookups, right before the relay op is opened; fail closed
+		return false
+	}
 	req := team.RelayCreateRequest{ID: m.newID(), Target: mr.Ref}
 	cw := newCapture()
 	m.createMemberRelayFor(cw, req, t, mr, false)
@@ -81,7 +84,7 @@ func (m *Module) acceptAskUnattended(a RelayAsk) (accepted bool) {
 // acceptOpenAsksUnattended accepts every open ask while the switch is on: the switch-on sweep and the liveness tick (an ask that a
 // transient error left open is tried again). Caller holds createMu.
 func (m *Module) acceptOpenAsksUnattended() int {
-	if !m.unattendedOn() {
+	if !m.unattendedOn() || !m.memberAutoOn() {
 		return 0
 	}
 	asks, err := m.store.listOpenAsks(m.now())

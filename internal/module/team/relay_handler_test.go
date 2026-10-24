@@ -138,7 +138,7 @@ func TestRelayBegin_Refusals(t *testing.T) {
 	notSelf := beginReq("sid-1")
 	notSelf.Self = false
 	check("not self", notSelf, http.StatusBadRequest, team.ErrBadRequest)
-	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true})
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true})
 	check("switch off", beginReq("sid-1"), http.StatusConflict, team.ErrSelfRelayOff)
 	f.switches.set(hostconfig.DefaultRelaySwitches)
 	if code, _ := f.do(http.MethodPost, "/api/relay/self", team.RelaySelfRequest{SessionID: "sid-1", Action: "off"}); code != http.StatusOK {
@@ -216,7 +216,7 @@ func TestRelayHelloAndSelf(t *testing.T) {
 	if r := self("off"); r.SelfRelay != "paused" || !r.HostSwitch {
 		t.Fatalf("off = %+v", r)
 	}
-	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true})
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true})
 	if r := self("on"); r.SelfRelay != "off" || r.HostSwitch {
 		t.Fatalf("on under a host switch that is off = %+v (a session switch only narrows)", r)
 	}
