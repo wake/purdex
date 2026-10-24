@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.776] - 2026-10-24
+
+> **主機設定的接力區多一個「member 自動接力提醒」開關（`relay.member_auto`）。** daemon 與 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。mod 只加了測試（`register.js` 沒改），**部署不用跑 `pdx setup`**；wwd 沒改，這版不重裝 wwd。依賴沒變，不用 `pnpm install`。
+>
+> 開關預設是開，而且只有關閉時才會出現在 host config 的線上格式與存檔裡，所以新舊 daemon、新舊 App 在預設值下互相相容。**要把它關掉，得等兩台 daemon 都是 776、而且所有 Mac App 都更新之後**：776 之前的 App 讀到 `member_auto:false` 會把整個接力區判成讀不到，這時在舊 App 按接力區的開關會洗掉自訂 prompt（#3970）。
+
+### Added
+
+- **`relay.member_auto`（#3968、#3969）**：關閉後，daemon 不再攔截 member 的閒置壓縮（hello 不帶 `idle_intercept`，已攔下的回 `route: silent`），member 壓縮後、用量 70% 與閒置時都不通知 lead，member 的 relay ask 回 409 `relay_unsupported`（mod 會等用量再升 10 點才再問），已開著的 ask 不補通知、無人值守不代為接受。每個會送出或寫入的地方都在動作前重讀一次開關，讀不到時當作關。lead 手動 `pdx relay _<ref>`、使用者的 `/relay`、`self_solo`／`self_lead` 都不受影響。App 主機頁的接力區第三列由說明文字改成這個開關。spec：`docs/specs/2026-10-24-member-relay-switch-spec-plan.md`。
+
 ## [1.0.0-alpha.775] - 2026-10-23
 
 > **守門員的喚醒設定有了自己的文件與 API、`pdx gate` 子命令移除、wwd 的快車道會讓給等太久的佇列工作，以及外接碟（KC3）沒掛時不再出錯。** daemon、`wwd`、**mod** 與 **SPA** 都有改：**部署要重跑 `pdx setup`**（pdx-test、pdx-watch 兩個 skill），**這版要重新打包 Mac App，使用者要更新**。依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變，wire 的 `proto` 仍是 3（facts 多一個選填的 `worker.waiting`）。
