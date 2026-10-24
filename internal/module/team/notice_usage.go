@@ -121,7 +121,7 @@ func (m *Module) noticeUsage() {
 func (m *Module) usageNotice(mr memberRow, pct int) {
 	// Looked at again right before the send: the member may have started a turn, or a relay op may have been created,
 	// since the check (the claim's statement only covers an op that existed before it).
-	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.asksForItself(mr.SessionID) || m.askOpen(mr.SessionID) {
+	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.asksForItself(mr.SessionID) || m.askOpen(mr.SessionID) || !m.memberAutoOn() {
 		m.rearm(mr)
 		return
 	}

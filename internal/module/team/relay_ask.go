@@ -45,20 +45,24 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.askRemote(w, req, row)
 		return
 	}
-	// member_auto off: an active member of a live team is refused; anything else keeps the answer it always had (not_member).
+	// The same mutex as the lead's relay create: an ask and a `pdx relay` for the same member are strictly ordered
+	// (ask first → the relay accepts it; relay first → the ask is refused relay_open).
+	m.createMu.Lock()
+	// member_auto is read again under createMu (an adopt takes the same lock, so this read and the member's state are ordered):
+	// off, an active member of a live team is refused; anything else keeps the answer it always had (not_member).
 	if !m.memberAutoOn() {
-		if _, _, isMember, err := m.store.ActiveMemberInLiveTeam(req.SessionID); err != nil {
-			m.logf("[team] relay ask %s: %v", req.RequestID, err)
-			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-			return
-		} else if isMember {
+		_, _, isMember, merr := m.store.ActiveMemberInLiveTeam(req.SessionID)
+		if merr != nil || isMember {
+			m.createMu.Unlock()
+			if merr != nil {
+				m.logf("[team] relay ask %s: %v", req.RequestID, merr)
+				m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+				return
+			}
 			m.writeMemberAutoOff(w)
 			return
 		}
 	}
-	// The same mutex as the lead's relay create: an ask and a `pdx relay` for the same member are strictly ordered
-	// (ask first → the relay accepts it; relay first → the ask is refused relay_open).
-	m.createMu.Lock()
 	now := m.now()
 	ask, replay, err := m.store.CreateRelayAsk(RelayAsk{ID: req.RequestID, SessionID: req.SessionID, UsedPct: req.UsedPct, Window: req.Window,
 		CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000})
@@ -138,6 +142,11 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 	}
 	now := m.now()
 	if !ok || cur.State != team.RelayAskOpen || cur.NotifiedAt != 0 || cur.ExpiresAt <= now {
+		return
+	}
+	// The final gate (member_auto, spec member-relay-switch §2): read right before the send, after the state re-check, so a
+	// switch turned off since the ask was created (or the mirror applied) sends nothing. The ask stays unnotified.
+	if !m.memberAutoOn() {
 		return
 	}
 	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(cur.SessionID)

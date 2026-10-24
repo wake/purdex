@@ -102,7 +102,7 @@ func (m *Module) noticeIdle() {
 // or the period may have ended, since the check; then nothing is sent, and a period that is still the same is given back.
 // A send that fails is not retried (advisory: the lead still sees CTX in `pdx team`).
 func (m *Module) idleNotice(mr memberRow, pct, minutes int, gen uint64) {
-	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) {
+	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) || !m.memberAutoOn() {
 		m.releaseIdleTold(mr.SessionID, gen)
 		return
 	}
