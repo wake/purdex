@@ -249,7 +249,7 @@ func TestReadRelay_SwitchesFailClosed(t *testing.T) {
 		r := readRelay(json.RawMessage(raw))
 		assert.Error(t, r.invalid, raw)
 		assert.Nil(t, r.dropped, raw)
-		assert.JSONEq(t, `{"self_solo":false,"self_lead":false}`, jsonOf(t, r.items), raw)
+		assert.JSONEq(t, `{"self_solo":false,"self_lead":false,"member_auto":false}`, jsonOf(t, r.items), raw)
 	}
 }
 
@@ -267,12 +267,12 @@ func TestReadRelay_ABadPromptBodyIsDroppedAlone(t *testing.T) {
 		raw := `{"self_solo":false,"prompt_write":"W","prompt_fix":` + body + `,"prompt_seed":"  "}`
 		r := readRelay(json.RawMessage(raw))
 		require.NoError(t, r.invalid, "%.40s", body)
-		assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true, PromptWrite: "W"}, r.items, "%.40s", body)
+		assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true, PromptWrite: "W"}, r.items, "%.40s", body)
 		assert.Equal(t, &Dropped{Count: 1, Reasons: []string{why}}, r.dropped, "%.40s", body)
 	}
 
 	r := readRelay(json.RawMessage(`{"self_lead":false,"prompt_write":null,"prompt_seed":"[pdx-relay"}`))
-	assert.Equal(t, RelaySwitches{SelfSolo: true, SelfLead: false}, r.items)
+	assert.Equal(t, RelaySwitches{SelfSolo: true, SelfLead: false, MemberAuto: true}, r.items)
 	assert.Equal(t, 2, r.dropped.Count)
 }
 

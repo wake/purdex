@@ -29,7 +29,7 @@ func TestRelaySwitches_DefaultsPutAndReader(t *testing.T) {
 	assert.JSONEq(t, `{"items":{"self_solo":false,"self_lead":true},"revision":1}`, rr.Body.String())
 	sw, err = m.RelaySwitches()
 	require.NoError(t, err)
-	assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true}, sw)
+	assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true}, sw)
 
 	rr = serve(m, http.MethodGet, "/api/hostconfig", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -86,7 +86,7 @@ func TestInit_RegistersRelaySwitchReader(t *testing.T) {
 func TestNormalizeRelay_PromptFields(t *testing.T) {
 	got, err := normalizeRelay(json.RawMessage(`{"self_lead":false,"prompt_write":"寫 {{path}}\n\tok","prompt_fix":" \n\t ","prompt_seed":"  seed  "}`))
 	require.NoError(t, err)
-	assert.Equal(t, RelaySwitches{SelfSolo: true, SelfLead: false, PromptWrite: "寫 {{path}}\n\tok", PromptSeed: "  seed  "}, got)
+	assert.Equal(t, RelaySwitches{SelfSolo: true, SelfLead: false, MemberAuto: true, PromptWrite: "寫 {{path}}\n\tok", PromptSeed: "  seed  "}, got)
 
 	for _, raw := range []string{
 		`{"prompt_write":null}`, `{"prompt_fix":1}`, `{"prompt_seed":["x"]}`, `{"prompt_write":{}}`, `{"prompt_seed":true}`,
@@ -98,7 +98,7 @@ func TestNormalizeRelay_PromptFields(t *testing.T) {
 	}
 	_, err = normalizeRelay(json.RawMessage(`{"prompt_writ":"x"}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "self_solo, self_lead, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
+	assert.Contains(t, err.Error(), "self_solo, self_lead, member_auto, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
 
 	m := newTestModule(t)
 	for _, items := range []string{`{"prompt_fix":"[pdx-relay"}`, `{"prompt_seed":"a\u007fb"}`, `{"prompt_write":null}`,
@@ -164,7 +164,7 @@ func TestRelayPrompts_DefaultsAndStored(t *testing.T) {
 	assert.Equal(t, team.RelayPromptBodies{Write: "W {{path}}", Seed: "S"}, p)
 	sw, err := m.RelaySwitches()
 	require.NoError(t, err)
-	assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true}, sw, "the switch reader answers the switches only")
+	assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true}, sw, "the switch reader answers the switches only")
 }
 
 // A stored body that no longer validates (written around the PUT) must not
@@ -180,7 +180,7 @@ func TestRelaySwitches_IgnoreABadStoredPrompt(t *testing.T) {
 	require.True(t, stored)
 	sw, err := m.RelaySwitches()
 	require.NoError(t, err)
-	assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true}, sw)
+	assert.Equal(t, RelaySwitches{SelfSolo: false, SelfLead: true, MemberAuto: true}, sw)
 	_, err = m.RelayPrompts()
 	assert.Error(t, err)
 }

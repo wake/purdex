@@ -32,6 +32,10 @@ const RelayPromptsKey = "hostconfig.relay-prompts"
 type RelaySwitches struct {
 	SelfSolo bool `json:"self_solo"` // a session that is neither lead nor member
 	SelfLead bool `json:"self_lead"` // a lead
+	// MemberAuto: the automatic relay help for a member on this host (idle-compaction hold, lead notices, 70% ask; spec
+	// 2026-10-24 member-relay-switch). Default true. It is serialized only while false (MarshalJSON), so an old Mac App that
+	// does not know the key never sees it on a default row.
+	MemberAuto bool `json:"-"`
 	// SpawnResourceCheck: a spawn in the warning or danger zone opens a spawn_resources card (RT-5a). Off by default (and left
 	// out of the stored row while off): the Mac App has to show the card first; the lead turns it on.
 	SpawnResourceCheck bool   `json:"spawn_resource_check,omitempty"`
@@ -41,7 +45,19 @@ type RelaySwitches struct {
 }
 
 // DefaultRelaySwitches is what a host that never wrote the row reads as.
-var DefaultRelaySwitches = RelaySwitches{SelfSolo: true, SelfLead: true}
+var DefaultRelaySwitches = RelaySwitches{SelfSolo: true, SelfLead: true, MemberAuto: true}
+
+// MarshalJSON writes member_auto only while it is false; every other field serializes exactly as before.
+func (r RelaySwitches) MarshalJSON() ([]byte, error) {
+	type plain RelaySwitches
+	if r.MemberAuto {
+		return json.Marshal(plain(r))
+	}
+	return json.Marshal(struct {
+		plain
+		MemberAuto bool `json:"member_auto"`
+	}{plain(r), false})
+}
 
 // relaySwitchesJSON is DefaultRelaySwitches as the GET answers it for a
 // never-written key (emptyFor).
@@ -68,9 +84,9 @@ func relayFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	}
 	for k := range fields {
 		switch k {
-		case "self_solo", "self_lead", "spawn_resource_check", "prompt_write", "prompt_fix", "prompt_seed":
+		case "self_solo", "self_lead", "member_auto", "spawn_resource_check", "prompt_write", "prompt_fix", "prompt_seed":
 		default:
-			return nil, errors.New("unknown relay field " + k + "; only self_solo, self_lead, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
+			return nil, errors.New("unknown relay field " + k + "; only self_solo, self_lead, member_auto, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
 		}
 	}
 	return fields, nil
@@ -85,14 +101,14 @@ func relaySwitchesOf(fields map[string]json.RawMessage) (RelaySwitches, error) {
 	for _, f := range []struct {
 		key string
 		dst *bool
-	}{{"self_solo", &out.SelfSolo}, {"self_lead", &out.SelfLead}, {"spawn_resource_check", &out.SpawnResourceCheck}} {
+	}{{"self_solo", &out.SelfSolo}, {"self_lead", &out.SelfLead}, {"spawn_resource_check", &out.SpawnResourceCheck}, {"member_auto", &out.MemberAuto}} {
 		v, present := fields[f.key]
 		if !present {
 			continue
 		}
 		var b bool
 		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &b) != nil {
-			return RelaySwitches{}, errors.New("self_solo, self_lead and spawn_resource_check must be booleans")
+			return RelaySwitches{}, errors.New("self_solo, self_lead, member_auto and spawn_resource_check must be booleans")
 		}
 		*f.dst = b
 	}
