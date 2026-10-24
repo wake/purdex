@@ -42,7 +42,7 @@ func TestHandlerGet_UnreadableValueIsInvalidOthersIntact(t *testing.T) {
 		"commands":{"items":[],"revision":0},
 		"resumeTemplates":{"items":{},"revision":0},
 		"quickReplies":{"items":[{"id":"q1","title":"go","content":"go","text":"go"}],"revision":1},
-		"relay":{"items":{"self_solo":false,"self_lead":false},"revision":1,"invalid":true},
+		"relay":{"items":{"self_solo":false,"self_lead":false,"member_auto":false},"revision":1,"invalid":true},
 		"team":{"items":{},"revision":1,"invalid":true},
 		"resources":{"items":{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},"deadline_s":540,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0,"load_cap_pct":100},"revision":0},
 		"relayQuota":{"items":{"rule":false},"revision":0},

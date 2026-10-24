@@ -110,6 +110,9 @@ func leaveAskAcceptedIn(tx *sql.Tx, sessionID string, now int64) error {
 // markFinalAsks is the sweeper's step (liveness tick) after the expiry: the final asks that lapsed pause their members, and each
 // lead is told. Caller holds no lock; the store call is one transaction.
 func (m *Module) markFinalAsks() {
+	if !m.memberAutoOn() { // relay.member_auto off: a final ask that lapses stays open and nobody is paused (ExpireRelayAsks leaves it be)
+		return
+	}
 	m.askMu.Lock()
 	marked, err := m.store.MarkFinalAsksUnanswered(m.now())
 	m.askMu.Unlock()

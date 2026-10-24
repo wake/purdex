@@ -75,13 +75,13 @@ func TestRelease_HelloAndBeginMatrix(t *testing.T) {
 			if code, _, _, body := f.release("_def456"); code != http.StatusOK {
 				t.Fatalf("release: %d %s", code, body)
 			}
-			f.switches.set(hostconfig.RelaySwitches{SelfSolo: true, SelfLead: true})
+			f.switches.set(hostconfig.RelaySwitches{SelfSolo: true, SelfLead: true, MemberAuto: true})
 			if c.paused {
 				if code, _, body := f.self("sid-2", "off"); code != http.StatusOK {
 					t.Fatalf("pause: %d %s", code, body)
 				}
 			}
-			f.switches.set(hostconfig.RelaySwitches{SelfSolo: c.solo, SelfLead: true})
+			f.switches.set(hostconfig.RelaySwitches{SelfSolo: c.solo, SelfLead: true, MemberAuto: true})
 			if code, h, body := f.hello("sid-2"); code != http.StatusOK || h.Role != "none" || h.SelfRelay != c.wantHello {
 				t.Fatalf("hello = %d %s, want role none, self_relay %s", code, body, c.wantHello)
 			}

@@ -38,12 +38,31 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	} else if ok {
+		if !m.memberAutoOn() {
+			m.writeMemberAutoOff(w)
+			return
+		}
 		m.askRemote(w, req, row)
 		return
 	}
 	// The same mutex as the lead's relay create: an ask and a `pdx relay` for the same member are strictly ordered
 	// (ask first → the relay accepts it; relay first → the ask is refused relay_open).
 	m.createMu.Lock()
+	// member_auto is read again under createMu (an adopt takes the same lock, so this read and the member's state are ordered):
+	// off, an active member of a live team is refused; anything else keeps the answer it always had (not_member).
+	if !m.memberAutoOn() {
+		_, _, isMember, merr := m.store.ActiveMemberInLiveTeam(req.SessionID)
+		if merr != nil || isMember {
+			m.createMu.Unlock()
+			if merr != nil {
+				m.logf("[team] relay ask %s: %v", req.RequestID, merr)
+				m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+				return
+			}
+			m.writeMemberAutoOff(w)
+			return
+		}
+	}
 	now := m.now()
 	ask, replay, err := m.store.CreateRelayAsk(RelayAsk{ID: req.RequestID, SessionID: req.SessionID, UsedPct: req.UsedPct, Window: req.Window,
 		CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000})
@@ -87,6 +106,12 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.notifyAskAsync(ask)
 	}
 	m.writeJSON(w, http.StatusOK, team.RelayAskResponse{ID: ask.ID, State: ask.State, ExpiresAt: ask.ExpiresAt, Replay: replay})
+}
+
+// writeMemberAutoOff is the answer to an ask while relay.member_auto is off. relay_unsupported is the code the mod already
+// treats as "do not ask again for another 10 points" (spec member-relay-switch §2-3).
+func (m *Module) writeMemberAutoOff(w http.ResponseWriter) {
+	m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "member 自動接力已在主機設定關閉 (member automatic relay is off in the host config)", nil)
 }
 
 // notifyAskAsync sends the lead's notice off the request's path; false when the daemon is stopping (notified_at stays 0,
@@ -147,6 +172,11 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 			return
 		}
 	}
+	// The final gate (member_auto, spec member-relay-switch §2): read after every lookup, right before the send, so a switch
+	// turned off since the ask was created (or the mirror applied) sends nothing. The ask stays unnotified.
+	if !m.memberAutoOn() {
+		return
+	}
 	if !m.noticeToLead(mr, t, text, "relay ask") {
 		return
 	}
@@ -199,7 +229,7 @@ func (m *Module) acceptOpenAsksOnTick() {
 // retryAskNotices is the sweeper's step (liveness tick): every open ask whose notice has not been delivered is sent
 // again, with the minutes left. The window is not extended.
 func (m *Module) retryAskNotices() {
-	if m.sender == nil || m.stopping() {
+	if m.sender == nil || m.stopping() || !m.memberAutoOn() {
 		return
 	}
 	asks, err := m.store.ListUnnotifiedAsks(m.now())

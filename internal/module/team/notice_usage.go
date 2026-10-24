@@ -77,6 +77,7 @@ func (m *Module) noticeUsage() {
 		return
 	}
 	threshold := float64(m.noticeAt)
+	autoOn := m.memberAutoOn() // off: the arm branch below still follows the usage; only the claim and the send are skipped
 	for _, mr := range members {
 		u, ok := m.usage.ContextUsage(mr.SessionID)
 		if !ok || u.UsedPercentage == nil {
@@ -90,6 +91,9 @@ func (m *Module) noticeUsage() {
 			if _, err := m.store.ArmNotice(mr.SpawnOp, mr.SessionID); err != nil {
 				m.logf("[team] usage notice: %v", err)
 			}
+			continue
+		}
+		if !autoOn {
 			continue
 		}
 		if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle {
@@ -117,7 +121,7 @@ func (m *Module) noticeUsage() {
 func (m *Module) usageNotice(mr memberRow, pct int) {
 	// Looked at again right before the send: the member may have started a turn, or a relay op may have been created,
 	// since the check (the claim's statement only covers an op that existed before it).
-	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.asksForItself(mr.SessionID) || m.askOpen(mr.SessionID) {
+	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.asksForItself(mr.SessionID) || m.askOpen(mr.SessionID) || !m.memberAutoOn() {
 		m.rearm(mr)
 		return
 	}
