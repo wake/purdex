@@ -1,6 +1,6 @@
 # member 自動接力開關（spec＋plan）
 
-2026-10-24。一張 PR：daemon（hostconfig＋team 模組）＋SPA 主機頁。不改 mod、不改 wire 格式、不動 schema。
+2026-10-24。兩張 PR：daemon（#3968，T1、T2）與 SPA＋mod 測試（#3969，T3、T4）。不改 mod、不改 wire 格式、不動 schema。
 
 ## 1. 背景
 
@@ -42,6 +42,8 @@ host config `relay` 列加一個布林欄位 **`member_auto`**，**預設 true**
 不受影響：
 - lead 手動 `pdx relay _<ref>`（`handleRelayCreate`）、使用者在 member 打的 `/relay`（`req.Manual`）。這是人主動要求的，與 `self_solo`／`self_lead` 不管手動 `/relay` 的原則一致。
 - 一般 session 與 lead 的自我接力（仍由 `self_solo`／`self_lead` 管）。
+
+**最終閘門原則**：每個會送出訊息或寫入資料的點，在實際動作前（取得該點的鎖、完成既有的狀態重驗之後）重讀開關。涵蓋 `sendAskNotice`（含遠端鏡像套用後的首次通知與 `retryAskNotices`；鏡像照常套用、只是不通知）、`handleRelayAsk` 與 `askRemote` 在 `createMu` 內、`acceptAskUnattended`、已排程的 `usageNotice`（關閉 → rearm）與 `idleNotice`（關閉 → `releaseIdleTold`）。遠端 member 在 `askRemote` 之前的檢查只當快速路徑（避免白讀 lead 主機的 capability）；本機 member 只有鎖內那一次。
 
 **讀不到開關時（store 錯誤、列無效）**：`member_auto` 視為 **false**。與 self 開關的 fail closed 同方向：讀不到就不做自動的事；這裡「不做」＝不攔截、不通知，壓縮照常，不會卡住任何 session。錯誤寫 daemon log（同一種錯誤不要每個 tick 都刷一行，節流或只在狀態變化時寫）。
 
@@ -104,7 +106,7 @@ host config `relay` 列加一個布林欄位 **`member_auto`**，**預設 true**
   - 手動：關時 lead 的 `POST /api/team/relays` 照常建 op；member 自己的 `/relay`（manual begin）照常。
 - 註解：`relay.go`、`relay_handler.go` 等處「a member has no switch (U13)」的說法改成指向本 spec。
 
-### T3 SPA：開關與文字（`spa/src/`）
+### T3 SPA：開關與文字（`spa/src/`）（#3969）
 - `lib/host-config-api.ts` 的 `RelaySwitches` 型別加 `member_auto: boolean`（必填，解析後一定有值）；`stores/useHostConfigStore.ts` 的 `DEFAULT_RELAY_SWITCHES` 加 `member_auto: true`。
 - `lib/host-config-parse.ts`：`RELAY_SWITCHES` 加 `member_auto`；缺少＝true；非布林 → 整列無法讀取；fail closed 的 `off()` 三個都 false。
 - PUT body：relay 的序列化在送出前**省略值為 true 的 `member_auto`**（§3）；放在送 relay PUT 的那一層（`saveRelay` 或 api 函式），讓 toggle、prompt 存檔、衝突後重寫都經過它。
@@ -117,7 +119,7 @@ host config `relay` 列加一個布林欄位 **`member_auto`**，**預設 true**
   - 保留：`member_auto:false` 經 self 開關 toggle、prompt 存檔、409 衝突後重試，送出的 body 仍是 false。
   - RelaySection：顯示開關、點擊送出翻轉後的值、locked 時不送；新標籤與小字（兩個語系）逐字斷言。
 
-### T4 mod 迴歸測試（只加測試，不改 `register.js`）
+### T4 mod 迴歸測試（只加測試，不改 `register.js`）（#3969）
 在 `cmd/pdx/plugin/purdex/hooks/member.test.ts`（或 `relay.test.ts`，依既有 harness）加：
 - member 收到 `route: "silent"` 後重送 hello，hello 回 `role: "member"` 但沒有 `idle_intercept` → 下一次閒置壓縮不被攔（`session.compact` 回 next 的結果，不是 `{skip}`）。
 - 那段期間的 `begin --self` 被回 409 `member_relay_is_leads` → 角色回到 member、`lastAskPct` 沒被改。
