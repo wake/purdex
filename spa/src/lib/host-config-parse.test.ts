@@ -209,12 +209,20 @@ describe('parseResumeTemplates', () => {
 describe('parseRelay', () => {
   it('both switches stored → as stored', () => {
     expect(parseRelay({ items: { self_solo: false, self_lead: true }, revision: 2 }, H))
-      .toEqual({ items: { self_solo: false, self_lead: true }, revision: 2, problem: null })
+      .toEqual({ items: { self_solo: false, self_lead: true, member_auto: true }, revision: 2, problem: null })
   })
 
   it('a missing switch defaults to on', () => {
-    expect(parseRelay({ items: { self_lead: false }, revision: 2 }, H).items).toEqual({ self_solo: true, self_lead: false })
-    expect(parseRelay({ items: {}, revision: 2 }, H).items).toEqual({ self_solo: true, self_lead: true })
+    expect(parseRelay({ items: { self_lead: false }, revision: 2 }, H).items).toEqual({ self_solo: true, self_lead: false, member_auto: true })
+    expect(parseRelay({ items: {}, revision: 2 }, H).items).toEqual({ self_solo: true, self_lead: true, member_auto: true })
+  })
+
+  it('member_auto: false is kept; a non-boolean member_auto is unreadable (fail closed, three off)', () => {
+    expect(parseRelay({ items: { member_auto: false }, revision: 2 }, H).items).toEqual({ self_solo: true, self_lead: true, member_auto: false })
+    for (const bad of [null, 'false', 0]) {
+      expect(parseRelay({ items: { member_auto: bad }, revision: 2 }, H))
+        .toEqual({ items: { self_solo: false, self_lead: false, member_auto: false }, revision: 2, problem: { kind: 'relay' } })
+    }
   })
 
   it.each([
@@ -225,18 +233,18 @@ describe('parseRelay', () => {
     ['null', null],
   ])('%s fails closed: both off, with a relay problem', (_name, items) => {
     expect(parseRelay({ items, revision: 2 }, H))
-      .toEqual({ items: { self_solo: false, self_lead: false }, revision: 2, problem: { kind: 'relay' } })
+      .toEqual({ items: { self_solo: false, self_lead: false, member_auto: false }, revision: 2, problem: { kind: 'relay' } })
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
   it('a collection that is not an object fails closed too', () => {
-    expect(parseRelay(null, H)).toEqual({ items: { self_solo: false, self_lead: false }, revision: 0, problem: { kind: 'relay' } })
+    expect(parseRelay(null, H)).toEqual({ items: { self_solo: false, self_lead: false, member_auto: false }, revision: 0, problem: { kind: 'relay' } })
   })
 
   // The row also holds the three relay prompt bodies (P9a-1, `relayFields`): known keys, kept as stored so a switch
   // toggle (which PUTs the whole object) never wipes them.
   it('the prompt bodies are known keys, kept as stored', () => {
-    const items = { self_solo: false, self_lead: true, prompt_write: 'write it', prompt_fix: '', prompt_seed: '  seed  ' }
+    const items = { self_solo: false, self_lead: true, member_auto: true, prompt_write: 'write it', prompt_fix: '', prompt_seed: '  seed  ' }
     expect(parseRelay({ items, revision: 2 }, H)).toEqual({ items, revision: 2, problem: null })
     expect(warn).not.toHaveBeenCalled()
   })
@@ -257,7 +265,7 @@ describe('parseRelay', () => {
     ['holding an unpaired surrogate', 'a\ud83db'],
   ])('a prompt body that is %s is dropped and counted; the switches still read', (_name, body) => {
     expect(parseRelay({ items: { self_solo: false, prompt_fix: body, prompt_seed: 'kept' }, revision: 2 }, H))
-      .toEqual({ items: { self_solo: false, self_lead: true, prompt_seed: 'kept' }, revision: 2, problem: { kind: 'rows', count: 1 } })
+      .toEqual({ items: { self_solo: false, self_lead: true, member_auto: true, prompt_seed: 'kept' }, revision: 2, problem: { kind: 'rows', count: 1 } })
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
@@ -270,7 +278,7 @@ describe('parseRelay', () => {
     ['an emoji (a surrogate pair)', 'go 😀'],
   ])('a prompt body with %s is kept', (_name, body) => {
     expect(parseRelay({ items: { prompt_write: body }, revision: 2 }, H))
-      .toEqual({ items: { self_solo: true, self_lead: true, prompt_write: body }, revision: 2, problem: null })
+      .toEqual({ items: { self_solo: true, self_lead: true, member_auto: true, prompt_write: body }, revision: 2, problem: null })
     expect(warn).not.toHaveBeenCalled()
   })
 
@@ -285,7 +293,7 @@ describe('parseRelay', () => {
 // #1889: the daemon's GET (and a PUT's answer, a 409's current) now sends only rows its PUT would take, and says
 // what it left out. The SPA shows its notice from those markers and keeps its own checks for an older daemon.
 describe("the daemon's markers", () => {
-  const off = { self_solo: false, self_lead: false }
+  const off = { self_solo: false, self_lead: false, member_auto: false }
 
   it('`invalid: true` is a shape problem; the items are read as sent (the empty value)', () => {
     expect(parseProjects({ items: [], revision: 3, invalid: true }, H)).toEqual({ items: [], revision: 3, problem: { kind: 'shape' } })
@@ -303,7 +311,7 @@ describe("the daemon's markers", () => {
     expect(parseProjects({ items: [P1, P2], revision: 3, dropped }, H)).toEqual({ items: [P1, P2], revision: 3, problem: { kind: 'rows', count: 2 } })
     expect(parseResumeTemplates({ items: { cc: CC }, revision: 1, dropped: { count: 1, reasons: [] } }, H).problem).toEqual({ kind: 'rows', count: 1 })
     expect(parseRelay({ items: { self_solo: false }, revision: 2, dropped: { count: 1, reasons: [] } }, H))
-      .toEqual({ items: { self_solo: false, self_lead: true }, revision: 2, problem: { kind: 'rows', count: 1 } })
+      .toEqual({ items: { self_solo: false, self_lead: true, member_auto: true }, revision: 2, problem: { kind: 'rows', count: 1 } })
     // One line naming the host, the collection, the count and the daemon's reasons.
     expect(String(warn.mock.calls[0][0])).toMatch(/h1.*projects.*2.*invalid slug "BAD"/)
   })

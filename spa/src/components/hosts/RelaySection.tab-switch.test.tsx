@@ -88,7 +88,7 @@ beforeEach(() => {
   })
   const e = emptyHostConfigEntry('ready')
   useHostConfigStore.setState({
-    byHost: { [H]: { ...e, relay: { self_solo: true, self_lead: true }, relaySupported: true, revisions: { ...e.revisions, relay: 1 } } },
+    byHost: { [H]: { ...e, relay: { self_solo: true, self_lead: true, member_auto: true }, relaySupported: true, revisions: { ...e.revisions, relay: 1 } } },
     load: vi.fn(async () => {}), saveRelay,
   })
   saveRelay.mockClear()
@@ -135,12 +135,12 @@ describe('relay prompt drafts across tab and sub-page switches', () => {
     await screen.findByTestId('relay-prompt-write')
     fireEvent.change(box(), { target: { value: 'saved body' } })
     fireEvent.click(screen.getByTestId('relay-prompt-write-save'))
-    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: true, self_lead: true, prompt_write: 'saved body' }))
+    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: true, self_lead: true, member_auto: true, prompt_write: 'saved body' }))
     await waitFor(() => expect(readRelayPromptDraft(`${H}:write`)).toBeUndefined())
 
     // Stored elsewhere meanwhile: a draft that came back would show 'saved body' instead.
     act(() => useHostConfigStore.setState((s) => ({
-      byHost: { [H]: { ...s.byHost[H], relay: { self_solo: true, self_lead: true, prompt_write: 'edited elsewhere' } } },
+      byHost: { [H]: { ...s.byHost[H], relay: { self_solo: true, self_lead: true, member_auto: true, prompt_write: 'edited elsewhere' } } },
     })))
     rerender(<Router hook={mem.hook}><TabContent activeTab={dashTab} allTabs={all} /></Router>)
     expect(screen.queryByTestId('relay-section')).toBeNull()

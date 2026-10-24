@@ -223,7 +223,7 @@ export function parseResumeTemplates(raw: unknown, hostId: string): ParsedCollec
   return { items, revision, problem: problemOf(raw, hostId, field, entries.length - kept.length) }
 }
 
-const RELAY_SWITCHES = ['self_solo', 'self_lead'] as const
+const RELAY_SWITCHES = ['self_solo', 'self_lead', 'member_auto'] as const
 const RELAY_PROMPTS = ['prompt_write', 'prompt_fix', 'prompt_seed'] as const
 const RELAY_KEYS: readonly string[] = [...RELAY_SWITCHES, ...RELAY_PROMPTS]
 
@@ -251,7 +251,7 @@ function relayPromptProblem(v: unknown): string | null {
 
 /**
  * The daemon's READ path, exactly (`relay.go` RelaySwitches → relayFields +
- * relaySwitchesOf): an object of the five known keys; an unknown key, or a
+ * relaySwitchesOf): an object of the six known keys; an unknown key, or a
  * present switch that is not a boolean (null included), makes the whole value
  * unreadable; a missing switch is on. The prompt bodies are not the switches'
  * business there either: one the daemon would take is kept as stored, any other
@@ -261,7 +261,7 @@ function readRelay(items: unknown, dropped: string[]): RelaySwitches | string {
   if (!isObject(items)) return 'items is not an object'
   const unknown = Object.keys(items).find((k) => !RELAY_KEYS.includes(k))
   if (unknown !== undefined) return `unknown key ${unknown}`
-  const out: RelaySwitches = { self_solo: true, self_lead: true }
+  const out: RelaySwitches = { self_solo: true, self_lead: true, member_auto: true }
   for (const key of RELAY_SWITCHES) {
     if (!Object.hasOwn(items, key)) continue
     const v = items[key]
@@ -284,8 +284,8 @@ function readRelay(items: unknown, dropped: string[]): RelaySwitches | string {
  */
 export function parseRelay(raw: unknown, hostId: string): ParsedCollection<RelaySwitches> {
   const off = (revision: number, why: string): ParsedCollection<RelaySwitches> => {
-    warn(hostId, 'relay', `${why}; the daemon refuses self relay, showing both switches off`)
-    return { items: { self_solo: false, self_lead: false }, revision, problem: { kind: 'relay' } }
+    warn(hostId, 'relay', `${why}; the daemon refuses self relay, showing the switches off`)
+    return { items: { self_solo: false, self_lead: false, member_auto: false }, revision, problem: { kind: 'relay' } }
   }
   if (!isObject(raw)) return off(0, 'collection is not an object')
   const revision = revisionOf(raw, hostId, 'relay')

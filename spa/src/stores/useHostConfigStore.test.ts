@@ -66,7 +66,7 @@ describe('load', () => {
     expect(e.resumeTemplates).toEqual(payload.resumeTemplates.items)
     expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1, quickReplies: 0, relay: 0 })
     expect(e.relaySupported).toBe(false)
-    expect(e.relay).toEqual({ self_solo: true, self_lead: true })
+    expect(e.relay).toEqual({ self_solo: true, self_lead: true, member_auto: true })
     expect(e.problems).toEqual({})
   })
 
@@ -189,7 +189,7 @@ describe('malformed collections', () => {
     expect(e.commands).toEqual([C1])
     expect(e.quickReplies).toEqual([])
     // Fails closed like the daemon, which refuses self relay on a value it cannot read.
-    expect(e.relay).toEqual({ self_solo: false, self_lead: false })
+    expect(e.relay).toEqual({ self_solo: false, self_lead: false, member_auto: false })
     expect(e.resumeTemplates).toEqual(payload.resumeTemplates.items)
     expect(e.revisions).toEqual({ projects: 3, commands: 2, resumeTemplates: 1, quickReplies: 5, relay: 1 })
     expect(e.problems).toEqual({

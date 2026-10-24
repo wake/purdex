@@ -129,7 +129,8 @@ describe('locale completeness', () => {
       expect(Object.keys(zh)).not.toContain('approval.dialog.no_more_asking') // the box is gone (relay v2 App contract 1)
       expect(Object.keys(zh)).not.toContain('approval.dialog.pause_failed')
       expect(zh['hosts.relay']).toBe('接力')
-      expect(zh['hosts.relay.member_note']).toBe('member 的接力一律由 lead 安排')
+      expect(zh['hosts.relay.member_auto']).toBe('member 自動接力提醒')
+      expect(Object.keys(zh)).not.toContain('hosts.relay.member_note')
     })
 
     it('has a state label for every closed state', () => {

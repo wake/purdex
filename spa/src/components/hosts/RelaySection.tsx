@@ -70,7 +70,7 @@ export function RelaySection({ hostId }: { hostId: string }) {
     return () => abort.abort()
   }, [hostId, promptsKey])
 
-  const toggle = useCallback((field: 'self_solo' | 'self_lead') => {
+  const toggle = useCallback((field: 'self_solo' | 'self_lead' | 'member_auto') => {
     setPending(true)
     setSaveError(null)
     // A click is a TOGGLE of the value stored when its task RUNS (PR #1742 R1): two quick clicks queue two tasks
@@ -131,8 +131,14 @@ export function RelaySection({ hostId }: { hostId: string }) {
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 px-3 py-2">
-              <span className="text-sm text-text-primary">{t('hosts.relay.member')}</span>
-              <span data-testid="relay-member-note" className="text-xs text-text-muted">{t('hosts.relay.member_note')}</span>
+              <span className="flex flex-col gap-0.5">
+                <span className="text-sm text-text-primary">{t('hosts.relay.member_auto')}</span>
+                <span data-testid="relay-member-auto-note" className="text-xs text-text-muted">{t('hosts.relay.member_auto_note')}</span>
+              </span>
+              <span className={locked ? 'opacity-50 pointer-events-none' : ''}>
+                <ToggleSwitch testId="relay-member-auto" label={t('hosts.relay.member_auto')} checked={entry.relay.member_auto}
+                  onChange={() => { if (!locked) toggle('member_auto') }} />
+              </span>
             </div>
           </div>
           {saveError && <p data-testid="relay-save-error" className="mt-3 text-xs text-status-warning-text whitespace-pre-wrap">{saveError}</p>}

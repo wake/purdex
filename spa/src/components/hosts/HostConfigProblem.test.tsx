@@ -35,7 +35,7 @@ const GOOD = {
   commands: { items: [C1], revision: 1 },
   resumeTemplates: { items: {}, revision: 0 },
   quickReplies: { items: [Q1], revision: 1 },
-  relay: { items: { self_solo: true, self_lead: true }, revision: 1 },
+  relay: { items: { self_solo: true, self_lead: true, member_auto: true }, revision: 1 },
 }
 
 /** Load H through the real store with one or more collections replaced. */
@@ -112,24 +112,25 @@ describe('a malformed host config collection', () => {
     expect(problem()).toHaveTextContent('the daemon refuses self relay')
     expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('false')
     expect(screen.getByTestId('relay-self-lead').getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByTestId('relay-member-auto').getAttribute('aria-checked')).toBe('false')
 
-    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: true, self_lead: false }, revision: 5 })
+    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: true, self_lead: false, member_auto: false }, revision: 5 })
     fireEvent.click(screen.getByTestId('relay-self-solo'))
     await waitFor(() => expect(screen.queryByTestId('host-config-problem')).toBeNull())
-    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: true, self_lead: false }, 4)
+    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: true, self_lead: false, member_auto: false }, 4)
     expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('true')
   })
 
   it('Relay: a toggle keeps the stored prompt bodies (the PUT replaces the whole row)', async () => {
     const prompts = { prompt_write: 'write it', prompt_seed: 'seed it' }
-    await loadWith({ relay: { items: { self_solo: true, self_lead: true, ...prompts }, revision: 6 } })
+    await loadWith({ relay: { items: { self_solo: true, self_lead: true, member_auto: true, ...prompts }, revision: 6 } })
     await show(<RelaySection hostId={H} />)
     expect(screen.queryByTestId('host-config-problem')).toBeNull()
 
-    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: false, self_lead: true, ...prompts }, revision: 7 })
+    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: false, self_lead: true, member_auto: true, ...prompts }, revision: 7 })
     fireEvent.click(screen.getByTestId('relay-self-solo'))
     await waitFor(() => expect(putHostConfig).toHaveBeenCalled())
-    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, ...prompts }, 6)
+    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, member_auto: true, ...prompts }, 6)
   })
 
   // #1889: the daemon now sends only the rows its PUT would take and says how many it left out.
@@ -156,9 +157,9 @@ describe('a malformed host config collection', () => {
     expect(problem()).toHaveTextContent('1 stored')
     expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('true')
 
-    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: false, self_lead: true, prompt_write: 'ok' }, revision: 9 })
+    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: false, self_lead: true, member_auto: true, prompt_write: 'ok' }, revision: 9 })
     fireEvent.click(screen.getByTestId('relay-self-solo'))
     await waitFor(() => expect(screen.queryByTestId('host-config-problem')).toBeNull())
-    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, prompt_write: 'ok' }, 8)
+    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, member_auto: true, prompt_write: 'ok' }, 8)
   })
 })

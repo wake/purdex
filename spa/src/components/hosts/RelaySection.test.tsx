@@ -59,46 +59,68 @@ beforeEach(() => {
 afterEach(() => clearAllRelayPromptDrafts())
 
 describe('RelaySection', () => {
-  it('shows the two switches with the stored values and the member line (spec §8.7 (a))', () => {
-    seed(entry({ self_solo: true, self_lead: false }))
+  it('shows the three switches with the stored values (spec §8.7 (a))', () => {
+    seed(entry({ self_solo: true, self_lead: false, member_auto: true }))
     render(<RelaySection hostId={H} />)
     expect(screen.getByText('接力')).toBeTruthy()
     expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('true')
     expect(screen.getByTestId('relay-self-lead').getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByTestId('relay-member-note').textContent).toBe('member 的接力一律由 lead 安排')
+    expect(screen.getByTestId('relay-member-auto').getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText('member 自動接力提醒')).toBeTruthy()
+    expect(screen.getByTestId('relay-member-auto-note').textContent)
+      .toBe('到門檻或閒置時通知 lead、擋下 member 的閒置壓縮請 lead 決定。關閉後 member 由 Claude Code 自行壓縮，lead 仍可手動 pdx relay。')
   })
 
   it('a toggle PUTs the whole relay object with the one field changed', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     fireEvent.click(screen.getByTestId('relay-self-solo'))
-    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: false, self_lead: true }))
+    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: false, self_lead: true, member_auto: true }))
     await waitFor(() => expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('false'))
     fireEvent.click(screen.getByTestId('relay-self-lead'))
-    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: false, self_lead: false }))
+    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: false, self_lead: false, member_auto: true }))
+  })
+
+  it('the member switch sends the flipped value; locked (offline) sends nothing', async () => {
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
+    render(<RelaySection hostId={H} />)
+    fireEvent.click(screen.getByTestId('relay-member-auto'))
+    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: true, self_lead: true, member_auto: false }))
+    await waitFor(() => expect(screen.getByTestId('relay-member-auto').getAttribute('aria-checked')).toBe('false'))
+    fireEvent.click(screen.getByTestId('relay-member-auto'))
+    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: true, self_lead: true, member_auto: true }))
+  })
+
+  it('the member switch shows English text in en', () => {
+    useI18nStore.getState().setLocale('en')
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
+    render(<RelaySection hostId={H} />)
+    expect(screen.getByText('Automatic relay reminders for members')).toBeTruthy()
+    expect(screen.getByTestId('relay-member-auto-note').textContent).toBe(
+      "Tells the lead at the threshold or when idle, and holds a member's idle compaction for the lead to decide. Off: members compact on their own; the lead can still run pdx relay.")
   })
 
   it('two clicks in one tick serialize: the second saves on top of the first, not over it', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     fireEvent.click(screen.getByTestId('relay-self-solo'))
     fireEvent.click(screen.getByTestId('relay-self-lead'))
     await waitFor(() => expect(saveRelay).toHaveBeenCalledTimes(2))
-    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: false, self_lead: false })
+    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: false, self_lead: false, member_auto: true })
   })
 
   it('a double click on ONE switch in one tick toggles twice: back to where it was (PR #1742 R1)', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     fireEvent.click(screen.getByTestId('relay-self-solo'))
     fireEvent.click(screen.getByTestId('relay-self-solo')) // same render: both clicks saw checked=true
     await waitFor(() => expect(saveRelay).toHaveBeenCalledTimes(2))
-    expect(saveRelay.mock.calls[0][1]).toEqual({ self_solo: false, self_lead: true })
-    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: true, self_lead: true })
+    expect(saveRelay.mock.calls[0][1]).toEqual({ self_solo: false, self_lead: true, member_auto: true })
+    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: true, self_lead: true, member_auto: true })
   })
 
   it('a save failure is shown and the switch keeps the daemon copy', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     saveRelay.mockRejectedValueOnce(new Error('boom'))
     render(<RelaySection hostId={H} />)
     fireEvent.click(screen.getByTestId('relay-self-lead'))
@@ -107,14 +129,14 @@ describe('RelaySection', () => {
   })
 
   it('an older daemon (no relay field) shows the unsupported note and no switches', () => {
-    seed(entry({ self_solo: true, self_lead: true }, false))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }, false))
     render(<RelaySection hostId={H} />)
     expect(screen.getByTestId('relay-unsupported').textContent).toContain('太舊')
     expect(screen.queryByTestId('relay-self-solo')).toBeNull()
   })
 
   it('offline: the notice shows and a click saves nothing', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'disconnected' } } }))
     render(<RelaySection hostId={H} />)
     expect(screen.getByTestId('host-config-notice').dataset.notice).toBe('host_config.offline')
@@ -133,7 +155,7 @@ describe('RelaySection prompts', () => {
   const click = (testId: string) => fireEvent.click(screen.getByTestId(testId))
 
   it('three editors when the route exists, each with the stored body, else the default', async () => {
-    seed(entry({ self_solo: true, self_lead: true, prompt_fix: 'my fix' }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true, prompt_fix: 'my fix' }))
     render(<RelaySection hostId={H} />)
     expect(await screen.findByTestId('relay-prompt-write')).toBeTruthy()
     expect(box('write').value).toBe('default write')
@@ -145,17 +167,17 @@ describe('RelaySection prompts', () => {
 
   it('an older daemon (plain 404): one line, no editors, and the toggles still work', async () => {
     vi.mocked(fetchRelayPrompts).mockResolvedValue('unsupported')
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     expect((await screen.findByTestId('relay-prompts-unsupported')).textContent).toContain('太舊')
     expect(screen.queryByTestId('relay-prompt-write')).toBeNull()
     click('relay-self-lead')
-    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: true, self_lead: false }))
+    await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H, { self_solo: true, self_lead: false, member_auto: true }))
   })
 
   it('a load failure is said, and the toggles still work', async () => {
     vi.mocked(fetchRelayPrompts).mockRejectedValue(new Error('storage_error'))
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     expect((await screen.findByTestId('relay-prompts-error')).textContent).toContain('storage_error')
     click('relay-self-solo')
@@ -163,13 +185,13 @@ describe('RelaySection prompts', () => {
   })
 
   it('a save PUTs the whole relay object, both switches and the other bodies included, through the relay queue', async () => {
-    seed(entry({ self_solo: false, self_lead: true, prompt_fix: 'my fix', prompt_seed: 'my seed' }))
+    seed(entry({ self_solo: false, self_lead: true, member_auto: true, prompt_fix: 'my fix', prompt_seed: 'my seed' }))
     render(<RelaySection hostId={H} />)
     await screen.findByTestId('relay-prompt-write')
     type('write', 'my write')
     click('relay-prompt-write-save')
     await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H,
-      { self_solo: false, self_lead: true, prompt_fix: 'my fix', prompt_seed: 'my seed', prompt_write: 'my write' }))
+      { self_solo: false, self_lead: true, member_auto: true, prompt_fix: 'my fix', prompt_seed: 'my seed', prompt_write: 'my write' }))
     expect(queueHostConfigSave).toHaveBeenCalledWith(`${H}:relay`, expect.any(Function))
     await waitFor(() => expect(readRelayPromptDraft(`${H}:write`)).toBeUndefined())
     expect(box('write').value).toBe('my write')
@@ -177,42 +199,61 @@ describe('RelaySection prompts', () => {
   })
 
   it('a toggle and a save in one tick serialize: the save reads the switch the toggle just wrote', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     await screen.findByTestId('relay-prompt-write')
     type('write', 'my write')
     click('relay-self-solo')
     click('relay-prompt-write-save')
     await waitFor(() => expect(saveRelay).toHaveBeenCalledTimes(2))
-    expect(saveRelay.mock.calls[0][1]).toEqual({ self_solo: false, self_lead: true })
-    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: false, self_lead: true, prompt_write: 'my write' })
+    expect(saveRelay.mock.calls[0][1]).toEqual({ self_solo: false, self_lead: true, member_auto: true })
+    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: false, self_lead: true, member_auto: true, prompt_write: 'my write' })
+  })
+
+  it('member_auto false survives a self-switch toggle, a prompt save, and a toggle after a 409 refresh', async () => {
+    seed(entry({ self_solo: true, self_lead: true, member_auto: false }))
+    render(<RelaySection hostId={H} />)
+    await screen.findByTestId('relay-prompt-write')
+    fireEvent.click(screen.getByTestId('relay-self-solo'))
+    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: false, self_lead: true, member_auto: false }))
+    type('write', 'my write')
+    click('relay-prompt-write-save')
+    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: false, self_lead: true, member_auto: false, prompt_write: 'my write' }))
+    saveRelay.mockImplementationOnce(async () => {
+      useHostConfigStore.setState((st) => ({ byHost: { ...st.byHost, [H]: { ...st.byHost[H], relay: { self_solo: false, self_lead: true, member_auto: false } } } }))
+      throw new HostConfigConflictError({ items: { self_solo: false, self_lead: true, member_auto: false }, revision: 9 })
+    })
+    fireEvent.click(screen.getByTestId('relay-self-lead'))
+    await waitFor(() => expect(screen.getByTestId('relay-save-error')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('relay-self-lead'))
+    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: false, self_lead: false, member_auto: false }))
   })
 
   it('a toggle after a save keeps the bodies', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     render(<RelaySection hostId={H} />)
     await screen.findByTestId('relay-prompt-seed')
     type('seed', 'my seed')
     click('relay-prompt-seed-save')
     await waitFor(() => expect(saveRelay).toHaveBeenCalledTimes(1))
     click('relay-self-lead')
-    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: true, self_lead: false, prompt_seed: 'my seed' }))
+    await waitFor(() => expect(saveRelay).toHaveBeenLastCalledWith(H, { self_solo: true, self_lead: false, member_auto: true, prompt_seed: 'my seed' }))
   })
 
   it('還原預設 PUTs "" for that body only', async () => {
-    seed(entry({ self_solo: true, self_lead: false, prompt_write: 'my write', prompt_seed: 'my seed' }))
+    seed(entry({ self_solo: true, self_lead: false, member_auto: true, prompt_write: 'my write', prompt_seed: 'my seed' }))
     render(<RelaySection hostId={H} />)
     await screen.findByTestId('relay-prompt-seed')
     click('relay-prompt-seed-restore')
     await waitFor(() => expect(saveRelay).toHaveBeenCalledWith(H,
-      { self_solo: true, self_lead: false, prompt_write: 'my write', prompt_seed: '' }))
+      { self_solo: true, self_lead: false, member_auto: true, prompt_write: 'my write', prompt_seed: '' }))
     await waitFor(() => expect(box('seed').value).toBe('default seed'))
     expect((screen.getByTestId('relay-prompt-seed-restore') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('a 409 keeps the draft and shows the conflict', async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
-    saveRelay.mockRejectedValueOnce(new HostConfigConflictError({ items: { self_solo: true, self_lead: true }, revision: 5 }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
+    saveRelay.mockRejectedValueOnce(new HostConfigConflictError({ items: { self_solo: true, self_lead: true, member_auto: true }, revision: 5 }))
     render(<RelaySection hostId={H} />)
     await screen.findByTestId('relay-prompt-fix')
     type('fix', 'my fix')
@@ -223,7 +264,7 @@ describe('RelaySection prompts', () => {
   })
 
   it("a daemon 400's detail is shown", async () => {
-    seed(entry({ self_solo: true, self_lead: true }))
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
     saveRelay.mockRejectedValueOnce(new HostConfigApiError(400, 'prompt_write: a relay prompt may hold no control character but newline and tab (found U+200E)'))
     render(<RelaySection hostId={H} />)
     await screen.findByTestId('relay-prompt-write')
@@ -256,7 +297,7 @@ describe('RelaySection prompts across hosts and endpoints', () => {
       hostOrder: [H, H2], runtime: { ...s.runtime, [H2]: { status: 'connected' } },
     }))
     useHostConfigStore.setState({
-      byHost: { [H]: entry({ self_solo: true, self_lead: true }), [H2]: entry({ self_solo: true, self_lead: true }) },
+      byHost: { [H]: entry({ self_solo: true, self_lead: true, member_auto: true }), [H2]: entry({ self_solo: true, self_lead: true, member_auto: true }) },
       load: vi.fn(async () => {}), saveRelay,
     })
   })

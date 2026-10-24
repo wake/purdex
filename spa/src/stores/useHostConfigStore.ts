@@ -55,7 +55,7 @@ export interface HostConfigEntry {
   error?: string
 }
 
-export const DEFAULT_RELAY_SWITCHES: RelaySwitches = Object.freeze({ self_solo: true, self_lead: true }) as RelaySwitches
+export const DEFAULT_RELAY_SWITCHES: RelaySwitches = Object.freeze({ self_solo: true, self_lead: true, member_auto: true }) as RelaySwitches
 
 export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostConfigEntry {
   return {
