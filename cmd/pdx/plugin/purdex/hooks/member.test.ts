@@ -1008,3 +1008,27 @@ test('RT-4 T42: a daemon that routes the intercept silent makes the mod drop the
   const r2 = await $.session.compact(compactEvent('auto'))
   expect(r2.skip).toBeUndefined()
 })
+
+// member_auto off (spec 2026-10-24 §2-1, T4): a mod that heard idle_intercept 1 before the switch went off is intercepted once; the daemon routes that
+// silent, the mod drops its role and says hello again, and this time the daemon answers role member WITHOUT idle_intercept. From then on idle
+// compactions run as ordinary ones. (The 409 member_relay_is_leads and the +10-point ask wait after relay_unsupported are covered in relay.test.ts:
+// "RT-2c: a begin refused member_relay_is_leads at ≥ 90 % still lets the member ask its lead" and "a 409 relay_unsupported also waits for +10 points".)
+test('member_auto off: silent, then hello answers member without idle_intercept: the next idle compaction is not intercepted', async ($, on) => {
+  let level = 1
+  const f = memberWorld(on, 'member', (argv) => {
+    if (argv[1] === 'compacted') return { exitCode: 0, stdout: '{"noticed":false,"route":"silent"}' }
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO('member', level) }
+    return undefined
+  })
+  await start($, f)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) }) // the one the old hello still armed
+  const before = calls(f, 'hello').length
+  level = 0 // the daemon's answer to the hello that follows: still a member, no idle_intercept
+  await f.clock.advance(300)
+  expect(calls(f, 'hello').length).toBe(before + 1)
+  const r2 = await $.session.compact(compactEvent('auto'))
+  expect(r2.skip).toBeUndefined()
+  await f.clock.advance(100)
+  // Only the first report was an interception; the second compaction is reported (if at all) as an ordinary one.
+  expect(compactCalls(f).filter((c: string) => c.includes('--intercepted')).length).toBe(1)
+})
