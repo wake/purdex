@@ -144,11 +144,6 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 	if !ok || cur.State != team.RelayAskOpen || cur.NotifiedAt != 0 || cur.ExpiresAt <= now {
 		return
 	}
-	// The final gate (member_auto, spec member-relay-switch §2): read right before the send, after the state re-check, so a
-	// switch turned off since the ask was created (or the mirror applied) sends nothing. The ask stays unnotified.
-	if !m.memberAutoOn() {
-		return
-	}
 	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(cur.SessionID)
 	if err != nil {
 		m.logf("[team] relay ask notice %s: %v", a.ID, err)
@@ -176,6 +171,11 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 			m.logf("[team] relay ask notice %s: host %s has no alias here; nothing the lead could type", a.ID, mr.HostID)
 			return
 		}
+	}
+	// The final gate (member_auto, spec member-relay-switch §2): read after every lookup, right before the send, so a switch
+	// turned off since the ask was created (or the mirror applied) sends nothing. The ask stays unnotified.
+	if !m.memberAutoOn() {
+		return
 	}
 	if !m.noticeToLead(mr, t, text, "relay ask") {
 		return

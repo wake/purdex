@@ -34,7 +34,7 @@ func (s *Store) listOpenAsks(now int64) ([]RelayAsk, error) {
 // accepted by the op's own transaction); an ask whose member was paused for quota is withdrawn as paused. Anything else leaves the
 // ask open for the lead. Caller holds createMu and has read the switch on.
 func (m *Module) acceptAskUnattended(a RelayAsk) (accepted bool) {
-	if m.stopping() || !m.memberAutoOn() { // the final gate: the switch is read again right before the relay op is opened
+	if m.stopping() {
 		return false
 	}
 	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(a.SessionID)
@@ -47,6 +47,9 @@ func (m *Module) acceptAskUnattended(a RelayAsk) (accepted bool) {
 	}
 	if !ok {
 		return false // the member left: the sweeper withdraws the ask
+	}
+	if !m.memberAutoOn() { // the final gate (member_auto): read after the lookups, right before the relay op is opened; fail closed
+		return false
 	}
 	req := team.RelayCreateRequest{ID: m.newID(), Target: mr.Ref}
 	cw := newCapture()

@@ -43,7 +43,9 @@ host config `relay` 列加一個布林欄位 **`member_auto`**，**預設 true**
 - lead 手動 `pdx relay _<ref>`（`handleRelayCreate`）、使用者在 member 打的 `/relay`（`req.Manual`）。這是人主動要求的，與 `self_solo`／`self_lead` 不管手動 `/relay` 的原則一致。
 - 一般 session 與 lead 的自我接力（仍由 `self_solo`／`self_lead` 管）。
 
-**最終閘門原則**：每個會送出訊息或寫入資料的點，在實際動作前（取得該點的鎖、完成既有的狀態重驗之後）重讀開關。涵蓋 `sendAskNotice`（含遠端鏡像套用後的首次通知與 `retryAskNotices`；鏡像照常套用、只是不通知）、`handleRelayAsk` 與 `askRemote` 在 `createMu` 內、`acceptAskUnattended`、已排程的 `usageNotice`（關閉 → rearm）與 `idleNotice`（關閉 → `releaseIdleTold`）。遠端 member 在 `askRemote` 之前的檢查只當快速路徑（避免白讀 lead 主機的 capability）；本機 member 只有鎖內那一次。
+**最終閘門原則**：每個會送出訊息或寫入資料的點，在實際動作前（取得該點的鎖、完成既有的狀態重驗之後）重讀開關。涵蓋 `sendAskNotice`（含遠端鏡像套用後的首次通知與 `retryAskNotices`；鏡像照常套用、只是不通知）、`handleRelayAsk` 與 `askRemote` 在 `createMu` 內、`acceptAskUnattended`、已排程的 `usageNotice`（關閉 → rearm）與 `idleNotice`（關閉 → `releaseIdleTold`）。遠端 member 在 `askRemote` 之前的檢查只當快速路徑（避免白讀 lead 主機的 capability）；本機 member 只有鎖內那一次。`sendAskNotice` 與 `acceptAskUnattended` 的重讀放在所有查詢之後、緊貼送出或建立 op 之前。
+
+**殘餘窗口（接受，不再追）**：主機設定的寫入不經過 team 模組的任何鎖，所以「讀到開著」與「送出／建立」之間永遠有一段毫秒級的窗口；在那段時間裡關掉開關，那一則通知或那一個 op 仍會出去。這是 check-then-act 的本質，不是漏擋。開關由人手動切換、一年幾次，窗口內剛好有自動動作的機率可忽略；要完全消除只能讓 host config 寫入與 team 模組共用鎖，成本不值得。review 再提「把檢查往後挪幾行」不再採納，除非中間隔著可能等很久的動作（鎖、網路、capability 讀取）。
 
 **讀不到開關時（store 錯誤、列無效）**：`member_auto` 視為 **false**。與 self 開關的 fail closed 同方向：讀不到就不做自動的事；這裡「不做」＝不攔截、不通知，壓縮照常，不會卡住任何 session。錯誤寫 daemon log（同一種錯誤不要每個 tick 都刷一行，節流或只在狀態變化時寫）。
 
