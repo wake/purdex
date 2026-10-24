@@ -361,4 +361,13 @@ describe('RelaySection prompts across hosts and endpoints', () => {
     await act(async () => { first.resolve(PROMPTS) })
     expect(box('write').value).toBe('other write')
   })
+
+  it('offline: a click on the member_auto switch saves nothing (the onChange guard, not only pointer-events)', async () => {
+    seed(entry({ self_solo: true, self_lead: true, member_auto: true }))
+    useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'disconnected' } } }))
+    render(<RelaySection hostId={H} />)
+    fireEvent.click(screen.getByTestId('relay-member-auto')) // jsdom ignores pointer-events-none, so this reaches onChange
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(saveRelay).not.toHaveBeenCalled()
+  })
 })
