@@ -63,6 +63,22 @@ describe('putHostConfig', () => {
     })
   })
 
+  it('relay: member_auto true is left out of the body (an old daemon/App must not see it)', async () => {
+    const fetchMock = vi.fn(async () => json({ items: {}, revision: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await putHostConfig(H, 'relay', { self_solo: true, self_lead: false, member_auto: true, prompt_write: 'w' }, 2)
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+    expect(JSON.parse(String(init.body))).toEqual({ items: { self_solo: true, self_lead: false, prompt_write: 'w' }, baseRevision: 2 })
+  })
+
+  it('relay: member_auto false goes out as false', async () => {
+    const fetchMock = vi.fn(async () => json({ items: {}, revision: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await putHostConfig(H, 'relay', { self_solo: true, self_lead: true, member_auto: false }, 2)
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+    expect(JSON.parse(String(init.body))).toEqual({ items: { self_solo: true, self_lead: true, member_auto: false }, baseRevision: 2 })
+  })
+
   it('PUTs items + baseRevision and returns the stored copy', async () => {
     const fetchMock = vi.fn(async () => json({ items: [], revision: 4 }))
     vi.stubGlobal('fetch', fetchMock)

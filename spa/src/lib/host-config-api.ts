@@ -22,6 +22,8 @@ export interface QuickReply { id: string; title: string; content: string }
 export interface RelaySwitches {
   self_solo: boolean
   self_lead: boolean
+  /** Automatic relay reminders for members. Default on; on the wire only when false (see `wireItems`). */
+  member_auto: boolean
   prompt_write?: string
   prompt_fix?: string
   prompt_seed?: string
@@ -93,6 +95,12 @@ export async function fetchHostConfig(hostId: string, signal?: AbortSignal): Pro
 
 /** A daemon from before v2 reads only `text` and drops the rest, so a quick reply also goes out as `text: content`. */
 function wireItems(collection: HostConfigCollection, items: unknown): unknown {
+  if (collection === 'relay') {
+    // `member_auto` is on the wire only when false: an older daemon/App rejects the key it does not know, and a
+    // row that is on by default must stay readable to them.
+    const { member_auto, ...rest } = items as RelaySwitches
+    return member_auto === false ? { ...rest, member_auto } : rest
+  }
   if (collection !== 'quick-replies') return items
   return (items as QuickReply[]).map((r) => ({ id: r.id, title: r.title, content: r.content, text: r.content }))
 }
