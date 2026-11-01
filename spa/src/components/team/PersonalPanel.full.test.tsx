@@ -87,11 +87,12 @@ describe('the card (R12–R15)', () => {
 })
 
 describe('the settings (R16–R21, R23)', () => {
-  it('「未分組」 has the group row and a hint, no name or colour rows (R16)', () => {
+  it('「未分組」 has the group row alone: no hint under it (the person asked for it gone, 11-02), no name or colour rows (R16)', () => {
     readRoot('S1', 'R1')
     scene()
     expect(q('personal-group-button').textContent).toContain('未分組')
-    expect(q('personal-ungrouped-hint')).toBeTruthy()
+    expect(screen.queryByTestId('personal-ungrouped-hint')).toBeNull()
+    expect(screen.getByTestId('personal-panel').textContent).not.toContain('還沒有編組')
     expect(screen.queryByTestId('personal-name-edit')).toBeNull()
     expect(screen.queryByTestId('personal-colors')).toBeNull()
     expect((q('personal-take-out') as HTMLButtonElement).disabled).toBe(true)

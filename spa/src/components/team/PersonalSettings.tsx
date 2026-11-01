@@ -120,9 +120,7 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
           {t('personal.settings.take_out')}
         </button>
       </div>
-      {manual === null ? (
-        <p data-testid="personal-ungrouped-hint" className="px-2 text-[11px] text-text-muted">{t('personal.settings.ungrouped_hint')}</p>
-      ) : (
+      {manual !== null && (
         <>
           <div className={ROW}>
             <span className={LABEL}>{t('personal.settings.name')}</span>
