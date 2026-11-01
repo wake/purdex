@@ -183,7 +183,7 @@ func (s *Store) ResetForRebuild(sid string) error {
 }
 
 // migrations: step i takes a file at user_version i to i+1. Never edit a shipped step; add the next one.
-var migrations = []func(x stepExec) error{migrateV1, migrateV2}
+var migrations = []func(x stepExec) error{migrateV1, migrateV2, migrateV3}
 
 type stepExec interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -317,5 +317,27 @@ func migrateV2(tx stepExec) error {
 		CREATE INDEX dlg_summaries_session_at ON dlg_summaries (session_id, turn_at);
 		CREATE INDEX dlg_summaries_session_no ON dlg_summaries (session_id, turn_no);
 		ALTER TABLE dlg_sessions ADD COLUMN since_recap INTEGER NOT NULL DEFAULT 0;`)
+	return err
+}
+
+// migrateV3: the recaps. job_id is unique so the same answer stored twice makes one row.
+func migrateV3(tx stepExec) error {
+	_, err := tx.Exec(`
+		CREATE TABLE dlg_recaps (
+			id INTEGER PRIMARY KEY,
+			job_id TEXT NOT NULL UNIQUE,
+			session_id TEXT NOT NULL,
+			conv_key TEXT NOT NULL DEFAULT '',
+			at INTEGER NOT NULL,
+			from_no INTEGER NOT NULL,
+			to_no INTEGER NOT NULL,
+			trigger TEXT NOT NULL,
+			headline TEXT NOT NULL,
+			body_json TEXT NOT NULL,
+			usage_in INTEGER NOT NULL DEFAULT 0,
+			usage_out INTEGER NOT NULL DEFAULT 0,
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL);
+		CREATE INDEX dlg_recaps_session ON dlg_recaps (session_id, id);`)
 	return err
 }

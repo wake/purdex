@@ -46,7 +46,7 @@ type Module struct {
 	jobs  *channel
 	lines *PushLines             // the push wait (registered at Init)
 	kinds map[string]kindHandler // extra kinds a test or T10 adds; Start adds the turn-summary kind
-	recap func(sid string)       // called when enough summaries are done since a recap; T10 sets it
+	rc    *recapper              // decides when a recap is queued (created by Start)
 
 	stopReaper context.CancelFunc
 	reaperDone chan struct{}
@@ -152,7 +152,10 @@ func (m *Module) Start(context.Context) error {
 			return prev, ok
 		}
 	}
-	hooks := Hooks{Placed: func(sid, turnID string) []string { return placedBlocks(st, sid, turnID) }}
+	hooks := Hooks{
+		Placed:  func(sid, turnID string) []string { return placedBlocks(st, sid, turnID) },
+		Carried: func(sid string, beforeNo int) string { return carriedRecap(st, sid, beforeNo) },
+	}
 	w := NewWriter(filepath.Join(dataDir, "dialogue"), st, prevOf, hooks, WithLogf(logf))
 	// What the last run left pending has no job any more: end it, or the push would wait for it until its timeout.
 	if n, err := st.FailPendingSummaries(); err != nil {
@@ -189,20 +192,39 @@ func (m *Module) Start(context.Context) error {
 	for k, h := range m.kinds {
 		kinds[k] = h
 	}
-	recap := m.recap
 	m.mu.Unlock()
-	kinds[kindTurnSummary] = &summaryKind{st: st, w: w, lines: lines, recap: recap, logf: logf}
+	rc := newRecapper(st, w, logf)
+	rc.broadcast = func(typ, value string) {
+		if m.core != nil && m.core.Events != nil {
+			m.core.Events.Broadcast("", typ, value)
+		}
+	}
+	kinds[kindTurnSummary] = &summaryKind{st: st, w: w, lines: lines, recap: func(sid string) { rc.request(sid, "every30") }, logf: logf}
+	kinds[kindRecap] = &recapKind{r: rc}
 	ch := newChannel(chanDeps{capable: capable, handlers: kinds, logf: logf})
+	rc.enqueue = ch.enqueue
 	sumIn.jobs = ch
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); ch.runReaper(ctx) }()
 	m.mu.Lock()
 	m.intake = in
-	m.jobs, m.stopReaper, m.reaperDone = ch, cancel, done
+	m.jobs, m.stopReaper, m.reaperDone, m.rc = ch, cancel, done, rc
 	m.unsubTurnEnd = sub.SubscribeTurnEnd(in.OnTurnEnd)
 	m.mu.Unlock()
 	return nil
+}
+
+// requestRecap queues a recap of the session (trigger: every30 | open | manual): "queued", "up_to_date" or "unavailable"
+// (the module is not running, or the session cannot take a job now).
+func (m *Module) requestRecap(sid, trigger string) string {
+	m.mu.Lock()
+	rc := m.rc
+	m.mu.Unlock()
+	if rc == nil {
+		return recapUnavailable
+	}
+	return rc.request(sid, trigger)
 }
 
 // Stop unsubscribes and waits for the workers, then stops the job channel, so nothing writes once it returns; the store

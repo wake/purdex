@@ -147,7 +147,7 @@ func summaryBlock(r SummaryRow) string {
 	return fmt.Sprintf("<turn-summary %d · %s | %s>\n%s\n", r.TurnNo, time.UnixMilli(r.TurnAt).Format("15:04"), oneLine(r.Title), r.Summary)
 }
 
-// placedBlocks are the blocks a rebuild puts back right after a turn: its done summaries (PR 2's recap joins them here).
+// placedBlocks are the blocks a rebuild puts back right after a turn: its done summaries, then the recaps that end at it.
 func placedBlocks(st *Store, sid, turnID string) []string {
 	rows, err := st.SummariesByTurnID(sid, turnID)
 	if err != nil {
@@ -156,6 +156,15 @@ func placedBlocks(st *Store, sid, turnID string) []string {
 	var out []string
 	for _, r := range rows {
 		out = append(out, summaryBlock(r))
+	}
+	if no, found, err := st.TurnNo(sid, turnID); err == nil && found {
+		if recaps, err := st.RecapsEndingAt(sid, no); err == nil {
+			for _, r := range recaps {
+				if body, err := recapOfRow(r); err == nil {
+					out = append(out, recapText(r, body, false))
+				}
+			}
+		}
 	}
 	return out
 }

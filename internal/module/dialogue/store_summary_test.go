@@ -30,8 +30,8 @@ func mustInsertSummary(t *testing.T, s *Store, r SummaryRow) int64 {
 
 func TestMigration2_SummariesAndSinceRecap(t *testing.T) {
 	s, _ := openTestStore(t)
-	if v := userVersion(t, s.db); v != 2 {
-		t.Fatalf("user_version = %d, want 2", v)
+	if v := userVersion(t, s.db); v != len(migrations) || v < 2 {
+		t.Fatalf("user_version = %d, want %d (at least 2)", v, len(migrations))
 	}
 	if !tableExists(t, s.db, "dlg_summaries") {
 		t.Fatal("dlg_summaries is missing")
