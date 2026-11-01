@@ -44,6 +44,8 @@ type Store struct {
 	now              func() int64 // unix ms; injectable for tests
 	wmu              sync.Mutex   // serialises the writes
 	failAfterSession func() error // test seam: runs inside Commit after the session upsert; nil in production
+	// failInSummaryDone: test seam; runs inside SetSummaryDone between the row change and the since_recap count.
+	failInSummaryDone func() error
 }
 
 // OpenStore opens (or creates) the store at path. The file and its WAL siblings are owner-only.
@@ -181,7 +183,7 @@ func (s *Store) ResetForRebuild(sid string) error {
 }
 
 // migrations: step i takes a file at user_version i to i+1. Never edit a shipped step; add the next one.
-var migrations = []func(x stepExec) error{migrateV1}
+var migrations = []func(x stepExec) error{migrateV1, migrateV2}
 
 type stepExec interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -285,5 +287,35 @@ func migrateV1(tx stepExec) error {
 			segment INTEGER NOT NULL,
 			ended_at INTEGER NOT NULL,
 			PRIMARY KEY (session_id, turn_id));`)
+	return err
+}
+
+// migrateV2: the turn summaries, and the count of them since the last recap.
+func migrateV2(tx stepExec) error {
+	_, err := tx.Exec(`
+		CREATE TABLE dlg_summaries (
+			id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			conv_key TEXT NOT NULL DEFAULT '',
+			turn_id TEXT NOT NULL,
+			turn_no INTEGER NOT NULL,
+			turn_at INTEGER NOT NULL,
+			turn_seq INTEGER NOT NULL DEFAULT 0,
+			state TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			push TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			push_ready_at INTEGER NOT NULL DEFAULT 0,
+			usage_in INTEGER NOT NULL DEFAULT 0,
+			usage_out INTEGER NOT NULL DEFAULT 0,
+			usage_cache_read INTEGER NOT NULL DEFAULT 0,
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			UNIQUE(session_id, turn_id));
+		CREATE INDEX dlg_summaries_session_at ON dlg_summaries (session_id, turn_at);
+		CREATE INDEX dlg_summaries_session_no ON dlg_summaries (session_id, turn_no);
+		ALTER TABLE dlg_sessions ADD COLUMN since_recap INTEGER NOT NULL DEFAULT 0;`)
 	return err
 }

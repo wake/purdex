@@ -40,8 +40,8 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 
 func TestOpenStoreCreatesSchema(t *testing.T) {
 	s, _ := openTestStore(t)
-	if v := userVersion(t, s.db); v != 1 {
-		t.Fatalf("user_version = %d, want 1", v)
+	if v := userVersion(t, s.db); v != len(migrations) {
+		t.Fatalf("user_version = %d, want %d", v, len(migrations))
 	}
 	for _, tb := range []string{"dlg_sessions", "dlg_turns"} {
 		if !tableExists(t, s.db, tb) {
