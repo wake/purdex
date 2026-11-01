@@ -360,7 +360,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   - 列表上一行：最新 recap 的 headline＋「截至 HH:MM」；
   - 點開是 recap 歷史，新的在上面；每則可展開全文，再往下展開那個範圍的回合摘要；
   - 「重新產生」按鈕；session 已結束時按鈕停用並說明。
-- 原型確認後才進 T14。
+- 原型確認後才進 T14。原型：`docs/pages/recap-view-mock.html`（https://pages.mlab.day/wake/purdex/recap-view-mock.html）。使用者 11-01 確認，兩題都選 B：(1) 還沒有 recap 的 session，團隊列先顯示最近一則回合摘要的標題，前面標「回合 N」，第一則 recap 出來後換成 headline；(2) recap 歷史最上面多一段「之後的 N 回合還沒寫進 recap」，展開是最後一則 recap 之後的回合摘要。
 
 ### T14. recap 入口與檢視
 
