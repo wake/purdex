@@ -344,6 +344,28 @@ describe('applyRecapEvent retries (fake timers)', () => {
     expect(entry()?.generating).toBe(false)
   })
 
+  it('an event for a session that was not generating (an automatic recap) shows generating while its re-read is out', async () => {
+    fetchRecaps.mockResolvedValueOnce(resp([recap(4)]))
+    await st().loadRecaps('h1', 'S1')
+    fetchRecaps.mockRejectedValueOnce(new Error('x')).mockResolvedValueOnce(resp([recap(7), recap(4)]))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(entry()?.generating).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(entry()?.recaps?.recaps[0].id).toBe(7)
+    expect(entry()?.generating).toBe(false)
+  })
+
+  it('an event for an older recap after a newer one does not lower the recap waited for', async () => {
+    await seed()
+    fetchRecaps.mockResolvedValue(resp([recap(6), recap(5), recap(4)]))
+    st().applyRecapEvent('h1', JSON.stringify({ session_id: 'S1', recap_id: 8 }))
+    st().applyRecapEvent('h1', JSON.stringify({ session_id: 'S1', recap_id: 6 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(entry()?.recaps?.recaps[0].id).toBe(6)
+    expect(entry()?.generating).toBe(true)
+  })
+
   it('a retry stops when the connection went away', async () => {
     await seed()
     fetchRecaps.mockRejectedValue(new Error('x'))

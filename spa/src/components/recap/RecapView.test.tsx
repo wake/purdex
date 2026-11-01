@@ -257,6 +257,22 @@ describe('RecapView: the turns after the newest recap (decision 2 = B)', () => {
     expect(screen.getByTestId('recap-after-capped')).toHaveTextContent('只列出最新 100 則')
   })
 
+  it('an ended session counts its last turns by number too', async () => {
+    fetchRecaps.mockResolvedValue(resp([recap(1, { to_no: 30 })], { newest_turn_no: 180, last_recap_to_no: 30, can_generate: false }))
+    fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? Array.from({ length: 100 }, (_, i) => turn(81 + i)) : []))
+    mount()
+    await settle()
+    expect(screen.getByTestId('recap-after')).toHaveTextContent('結束前最後 150 回合沒有寫進 recap')
+    cleanup()
+    useDialogueStore.getState().reset()
+    useDialogueStore.getState().setSupport('h1', true)
+    fetchRecaps.mockResolvedValue(resp([recap(1, { to_no: 30 })], { newest_turn_no: 180, last_recap_to_no: 30 }))
+    requestRecap.mockResolvedValue('queued')
+    mount()
+    await settle()
+    expect(screen.getByTestId('recap-after')).toHaveTextContent('這 150 則正在寫進新的 recap')
+  })
+
   it('no capped note when the listed summaries are all of them', async () => {
     fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33 }))
     fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? [turn(31), turn(32), turn(33)] : []))
