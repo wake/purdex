@@ -16,6 +16,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
 import { HalfHandoffMark } from '../relay/HalfHandoffMark'
 import { useFreshHandoffOfRosterSession } from '../../hooks/useFreshHandoff'
+import { RecapRowButton } from '../recap/RecapButton'
+import { RecapLine } from '../recap/RecapLine'
+import { openRecapView, type RecapTarget } from '../../stores/useRecapViewStore'
 
 interface RowProps {
   teamKey: string
@@ -48,6 +51,8 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
   const persona = useSeat(seat.address)
   const name = persona?.name ?? seat.title
   const showTitle = persona !== null && seat.title !== '' && seat.title !== persona.name
+  // The recap's way in: the clock ending line 1 and the second line both open this seat's history in the panel area.
+  const recapTarget: RecapTarget = { scope: teamKey, teamKey, hostId: seat.hostId, sessionId: seat.sessionId, title: seat.title, address: seat.address }
   return (
     <div
       role="button"
@@ -111,6 +116,7 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
           <span data-testid="team-panel-ctx" className="text-[10.5px] tabular-nums text-text-muted">{ctxLeftText(noAnswer ? undefined : r.ctx)}</span>
           <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
         </span>
+        <RecapRowButton target={recapTarget} />
       </div>
       {/* 被擋下 (UP-5b): the roster row says it is paused; the chip's 解除 goes to the host the seat lives on. */}
       {paused && (
@@ -119,7 +125,8 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
           {seat.hostId !== '' && <PauseReleaseButton hostId={seat.hostId} sessionId={seat.sessionId} causes={paused.causes} />}
         </div>
       )}
-      {/* T14: the latest recap headline goes here (the row's second line, under the paused chip). */}
+      {/* The row's second line: the newest recap's headline (under the paused chip). */}
+      <RecapLine hostId={seat.hostId} sessionId={seat.sessionId} onOpen={() => openRecapView(recapTarget)} />
       </div>
     </div>
   )

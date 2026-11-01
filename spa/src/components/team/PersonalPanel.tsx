@@ -10,7 +10,9 @@ import { PersonalCard } from './PersonalCard'
 import { PersonalSettings } from './PersonalSettings'
 import { useHeaderGestures } from './useHeaderGestures'
 import { CAPSULE_MAX_W, CELL_GAP, HEADER_GAP, HEADER_H, HEADER_PX } from './panel-layout'
-import { usePersonalGroup } from './usePersonalPanel'
+import { usePersonalGroup, usePersonalNames } from './usePersonalPanel'
+import { RecapView } from '../recap/RecapView'
+import { isRecapOpen, useRecapViewStore } from '../../stores/useRecapViewStore'
 import { usePersonalActions } from './usePersonalActions'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PaneMode, PanelMode } from '../../stores/useTeamUiStore'
@@ -29,6 +31,9 @@ export function PersonalPanel({ target, mode, onSetMode }: Props) {
   const t = useI18nStore((s) => s.t)
   const { group, rootKnown } = usePersonalGroup(target, mode === 'full')
   const actions = usePersonalActions(target)
+  // The recap history of this tab's session takes the card's and the settings' place (full form only; opening it brings the panel to the full form).
+  const recapShown = useRecapViewStore((s) => isRecapOpen(s.open, target.tabId, target.agentSessionId))
+  const { name } = usePersonalNames(target)
   const [renameRequest, setRenameRequest] = useState(0)
   // canEdit is off: the header's own double-click handling only cancels the single-click wait. A double-click on the capsule of a manual group is ours: the full form with the name field open.
   const { rootRef, hdr } = useHeaderGestures({ teamKey: target.tabId, mode, onSetMode, canEdit: false })
@@ -63,10 +68,18 @@ export function PersonalPanel({ target, mode, onSetMode }: Props) {
               <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
             </span>
           </div>
-          <div className="border-t border-border-subtle py-1.5">
-            <PersonalCard target={target} />
-          </div>
-          <PersonalSettings group={group} rootKnown={rootKnown} actions={actions} renameRequest={renameRequest} />
+          {recapShown ? (
+            <div className="border-t border-border-subtle flex flex-col flex-1 min-h-0">
+              <RecapView hostId={target.hostId} sessionId={target.agentSessionId} label={name} backLabel={t('recap.view.back_card')} onBack={() => useRecapViewStore.getState().close()} />
+            </div>
+          ) : (
+            <>
+              <div className="border-t border-border-subtle py-1.5">
+                <PersonalCard target={target} />
+              </div>
+              <PersonalSettings group={group} rootKnown={rootKnown} actions={actions} renameRequest={renameRequest} />
+            </>
+          )}
         </>
       )}
     </div>

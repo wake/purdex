@@ -15,6 +15,7 @@ import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
 import { UnattendedButton } from './UnattendedButton'
 import { PersonalButton, PersonalTitleStrip, TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
 import { usePersonalRootsInterest, usePersonalTarget } from './team/usePersonalPanel'
+import { PersonalTitleBarRecap, TeamTitleBarRecap } from './recap/TitleBarRecap'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTitleBarLayout } from './team/title-bar-layout'
 import { useTitleBarTeam } from './team/useTitleBarTeam'
@@ -197,6 +198,8 @@ export function TitleBar({ title }: Props) {
         <div ref={btnsRef} data-testid="title-bar-right" className="shrink-0 flex items-center">
         {/* Notebook (WA-2a′) / 個人: moves the panel area between the title bar and the pane; a team tab, or a tab that shows an agent session. */}
         {team ? <TeamNotebookButton team={team} /> : personal && <PersonalButton />}
+        {/* Recap: the history of the session the tab shows (needs dialogue.v1 on its host). */}
+        {team ? <TeamTitleBarRecap team={team} /> : personal && <PersonalTitleBarRecap target={personal} />}
         {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
         <UnattendedButton />
         <div

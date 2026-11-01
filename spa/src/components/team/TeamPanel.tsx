@@ -16,6 +16,7 @@ import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { keepFocus } from './panel-focus'
 import { PanelRow } from './TeamPanelRow'
+import { EndedGroup } from './TeamEndedGroup'
 import { TeamSettingsBlock } from './TeamSettingsBlock'
 import { offersAny, useTeamSettingsOffer } from './team-settings'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -122,6 +123,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
           />
         ))}
       </div>
+      <EndedGroup teamKey={teamKey} />
       {showSettings && <TeamSettingsBlock hostId={leadHost} teamId={leadTeam} name={team.name} />}
     </>
   )

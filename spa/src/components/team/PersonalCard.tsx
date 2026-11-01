@@ -1,5 +1,5 @@
 // spa/src/components/team/PersonalCard.tsx — the personal panel's card (task groups spec §7, TG-5c; design R12–R15): the lead row's look for one session — 44 px avatar, agent icon with its light, host, name, title, context left with
-// its ring — and, later, the latest recap as the second line. The card is always the "active" row: it is the tab in view, so a click on it does nothing.
+// its ring — and the latest recap as the second line. The card is always the "active" row: it is the tab in view, so a click on it does nothing.
 import { Avatar } from '../Avatar'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
@@ -10,6 +10,9 @@ import { ctxLeftText, ctxTip } from './team-readings'
 import { usePersonalNames, usePersonalReading } from './usePersonalPanel'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PersonalTarget } from '../../lib/task-groups/personal'
+import { RecapRowButton } from '../recap/RecapButton'
+import { RecapLine } from '../recap/RecapLine'
+import { openRecapView, type RecapTarget } from '../../stores/useRecapViewStore'
 
 interface Props {
   target: PersonalTarget
@@ -23,6 +26,7 @@ export function PersonalCard({ target }: Props) {
   const ctx = ended ? undefined : r.ctx
   const model = ended ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
   const tip = `${model} · ${ctxTip(ctx, t)}`
+  const recapTarget: RecapTarget = { scope: target.tabId, teamKey: null, hostId: target.hostId, sessionId: target.agentSessionId, title: '', address: '' }
   return (
     <div
       data-testid="personal-card"
@@ -50,8 +54,10 @@ export function PersonalCard({ target }: Props) {
             <span data-testid="personal-card-ctx" className="text-[10.5px] tabular-nums text-text-muted">{ctxLeftText(ctx)}</span>
             <ContextRing pct={ctx} model={ended ? undefined : r.model} size={16} />
           </span>
+          <RecapRowButton target={recapTarget} />
         </div>
-        {/* T14: the latest recap headline goes here (the card's second line). */}
+        {/* The card's second line: the newest recap's headline (an ended session's is the last one it left). */}
+        <RecapLine hostId={target.hostId} sessionId={target.agentSessionId} ended={ended} onOpen={() => openRecapView(recapTarget)} />
       </div>
     </div>
   )

@@ -20,6 +20,9 @@ import { usePersonalTarget } from './usePersonalPanel'
 import { TeamPanel } from './TeamPanel'
 import { useShownPanelWidth } from './useShownPanelWidth'
 import { PersonalPanel } from './PersonalPanel'
+import { RecapView } from '../recap/RecapView'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
+import { useRecapViewStore, type RecapTarget } from '../../stores/useRecapViewStore'
 
 export function TeamPanelArea() {
   const t = useI18nStore((s) => s.t)
@@ -27,6 +30,7 @@ export function TeamPanelArea() {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const personal = usePersonalTarget()
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
+  const recapOpen = useRecapViewStore((s) => s.open)
   const panelTeam = display ? display.panelTeam(activeTabId) : null
   const view0 = panelView({ panelTeam, personal })
   // The team the area draws a frame for: the team view.
@@ -44,6 +48,7 @@ export function TeamPanelArea() {
   const shownWidth = useShownPanelWidth(shownTeam, view0 !== null && view0.kind === 'personal' && mode === 'line')
   if (hidden) return null
   const paneMode = mode
+  const recap = recapOpen !== null && shownTeam !== null && recapOpen.scope === shownTeam.teamKey && mode === 'full' ? recapOpen : null
 
   return (
     <div
@@ -71,7 +76,9 @@ export function TeamPanelArea() {
         />
       </div>
       <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl">
-        {shownTeam && display ? (
+        {recap !== null ? (
+          <TeamRecap target={recap} />
+        ) : shownTeam && display ? (
           <TeamPanel
             team={shownTeam}
             activeTabId={activeTabId}
@@ -91,4 +98,12 @@ export function TeamPanelArea() {
       </div>
     </div>
   )
+}
+
+/** A team seat's recap history (a live seat's or one that left): it takes the team view's place; back returns to it. The heading names the seat by its persona, else its title. */
+function TeamRecap({ target }: { target: RecapTarget }) {
+  const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the name reads the persona store without subscribing: redraw when it loads or changes
+  const label = target.address !== '' ? seatName(target.address, target.title) : target.title
+  return <RecapView hostId={target.hostId} sessionId={target.sessionId} label={label} backLabel={t('recap.view.back_team')} onBack={() => useRecapViewStore.getState().close()} />
 }
