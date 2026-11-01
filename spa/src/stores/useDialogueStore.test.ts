@@ -366,6 +366,27 @@ describe('applyRecapEvent retries (fake timers)', () => {
     expect(entry()?.generating).toBe(true)
   })
 
+  it('every re-read answering without the announced recap also ends as a failed read', async () => {
+    await seed()
+    fetchRecaps.mockResolvedValue(resp([recap(5), recap(4)]))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 4000)
+    expect(fetchRecaps).toHaveBeenCalledTimes(1 + 4)
+    expect(entry()?.generating).toBe(false)
+    expect(entry()?.loadFailed).toBe(true)
+  })
+
+  it('a newer event stops the older one\'s retries: they do not end the newer one\'s wait', async () => {
+    await seed()
+    fetchRecaps.mockRejectedValue(new Error('x'))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(5000)
+    st().applyRecapEvent('h1', JSON.stringify({ session_id: 'S1', recap_id: 9 }))
+    await vi.advanceTimersByTimeAsync(2500) // the first event's last attempt (at 7s) would give up here
+    expect(entry()?.generating).toBe(true)
+    expect(entry()?.loadFailed).toBe(false)
+  })
+
   it('a retry stops when the connection went away', async () => {
     await seed()
     fetchRecaps.mockRejectedValue(new Error('x'))

@@ -84,6 +84,8 @@ const RETRY_DELAYS_MS = [1000, 2000, 4000]
 
 /** Per (host, session), the number of the last recaps GET sent: answers are ordered by when they were sent, not by when they landed. */
 const recapsIssued = new Map<string, number>()
+/** Per (host, session), the number of the last `dialogue.recap` event: only its re-read may retry or give up (it waits for the newest recap announced). */
+const announced = new Map<string, number>()
 
 export const useDialogueStore = create<DialogueState>()((set, get) => {
   // A request still out is the current one only while its host kept the same connection: `setSupport(false)` and `forgetHost` move the epoch.
@@ -134,20 +136,25 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
     await readRecaps(hostId, sessionId, limit)
   }
 
-  /** A `dialogue.recap` event's re-read: retried (1s, 2s, 4s) while it fails or still shows nothing as new as the announced recap. */
+  /** A `dialogue.recap` event's re-read: retried (1s, 2s, 4s) while it fails or still shows nothing as new as the announced recap. A newer event's
+   *  re-read takes over; giving up (failed reads, or reads that never showed the announced recap) clears the mark and flags the read as failed. */
   async function rereadAnnounced(hostId: string, sessionId: string): Promise<void> {
     const epoch = get().epoch[hostId] ?? 0
+    const key = `${hostId}\u0000${sessionId}`
+    const mine = (announced.get(key) ?? 0) + 1
+    announced.set(key, mine)
+    const current = () => alive(hostId, epoch) && announced.get(key) === mine
     for (let attempt = 0; ; attempt++) {
       const outcome = await readRecaps(hostId, sessionId)
-      if (outcome === 'dropped' || !alive(hostId, epoch)) return
+      if (outcome === 'dropped' || !current()) return
       const e = selectDialogueEntry(get(), hostId, sessionId)
       if (outcome === 'ok' && !e?.generating) return
       if (attempt >= RETRY_DELAYS_MS.length) {
-        set((s) => withEntry(s, hostId, sessionId, (x) => ({ ...x, generating: false, loadFailed: outcome === 'failed' })))
+        set((s) => withEntry(s, hostId, sessionId, (x) => ({ ...x, generating: false, loadFailed: true })))
         return
       }
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]))
-      if (!alive(hostId, epoch)) return
+      if (!current()) return
     }
   }
 

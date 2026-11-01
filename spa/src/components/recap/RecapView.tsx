@@ -137,7 +137,7 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
             {afterOpen && (
               <div className="px-2 pb-1.5">
                 <TurnRows list={pending} />
-                {pending.length >= TURN_SUMMARIES_LIMIT && <p data-testid="recap-after-capped" className="mt-1 text-[10.5px] text-text-muted">{t('recap.after.capped', { n: TURN_SUMMARIES_LIMIT })}</p>}
+                {pending.length >= TURN_SUMMARIES_LIMIT && newCount > pending.length && <p data-testid="recap-after-capped" className="mt-1 text-[10.5px] text-text-muted">{t('recap.after.capped', { n: TURN_SUMMARIES_LIMIT })}</p>}
               </div>
             )}
           </div>

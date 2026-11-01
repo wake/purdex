@@ -273,6 +273,25 @@ describe('RecapView: the turns after the newest recap (decision 2 = B)', () => {
     expect(screen.getByTestId('recap-after')).toHaveTextContent('這 150 則正在寫進新的 recap')
   })
 
+  it('no capped note when exactly the limit of turns is waiting and all of them are listed', async () => {
+    fetchRecaps.mockResolvedValue(resp([recap(1, { to_no: 30 })], { newest_turn_no: 130, last_recap_to_no: 30 }))
+    fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? Array.from({ length: 100 }, (_, i) => turn(31 + i)) : []))
+    requestRecap.mockResolvedValue('up_to_date')
+    mount()
+    await settle()
+    expect(screen.queryByTestId('recap-after-capped')).toBeNull()
+  })
+
+  it('no capped note when a turn has no summary (fewer listed than turns, under the limit)', async () => {
+    fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33 }))
+    fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? [turn(31), turn(33)] : []))
+    requestRecap.mockResolvedValue('up_to_date')
+    mount()
+    await settle()
+    expect(screen.getByTestId('recap-after')).toHaveTextContent('有 3 則新的回合摘要')
+    expect(screen.queryByTestId('recap-after-capped')).toBeNull()
+  })
+
   it('no capped note when the listed summaries are all of them', async () => {
     fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33 }))
     fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? [turn(31), turn(32), turn(33)] : []))
