@@ -79,6 +79,10 @@ var deviceAllowed = map[string]bool{
 	"PUT /api/devices/self": true,
 	// agent upload: the iOS deck / chat attachments (the phone sends inject=0 and carries the returned path in its own message)
 	"POST /api/agent/upload": true,
+	// dialogue: the recap view (recaps, the turn summaries behind them, and the request for a fresh recap)
+	"GET /api/dialogue/{session_id}/recaps":         true,
+	"GET /api/dialogue/{session_id}/turn-summaries": true,
+	"POST /api/dialogue/{session_id}/recap":         true,
 }
 
 // nexEnginePattern is the one pattern that mounts the whole embedded engine; for a device the scope looks past the pattern.

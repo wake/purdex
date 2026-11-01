@@ -176,6 +176,9 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("hostconfig") {
 		out = append(out, "personas.v1") // GET/PUT /api/hostconfig/personas (not in GET /api/hostconfig), the hostconfig.personas event; the name pool and the journal follow the personas (name pool v2, NP-1)
 	}
+	if c.moduleReady("dialogue") {
+		out = append(out, "dialogue.v1") // GET /api/dialogue/{session_id}/recaps?limit=, GET …/turn-summaries?from=&to=&limit=, POST …/recap {trigger}; the dialogue.recap host event {session_id, recap_id}; only while the dialogue module runs
+	}
 	return out
 }
 

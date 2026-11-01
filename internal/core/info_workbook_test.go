@@ -15,3 +15,12 @@ func TestHandleInfo_NoWorkbookOrJournalCapability(t *testing.T) {
 		assert.NotContains(t, caps, c)
 	}
 }
+
+// dialogue.v1 follows the dialogue module's readiness (the real module is exercised in cmd/pdx, which can import it).
+func TestHandleInfo_DialogueCapabilityFollowsReadiness(t *testing.T) {
+	assert.NotContains(t, infoOf(t, devicesCore(nil))["capabilities"], "dialogue.v1")
+	ready := &devicesStub{stubModule{name: "dialogue"}, map[string]any{"ready": true, "init_error": ""}}
+	assert.Contains(t, infoOf(t, devicesCore(ready))["capabilities"], "dialogue.v1")
+	broken := &devicesStub{stubModule{name: "dialogue"}, map[string]any{"ready": false, "init_error": "x"}}
+	assert.NotContains(t, infoOf(t, devicesCore(broken))["capabilities"], "dialogue.v1")
+}

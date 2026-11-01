@@ -76,6 +76,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
 		"POST /api/agent/upload",
+		"GET /api/dialogue/{session_id}/recaps", "GET /api/dialogue/{session_id}/turn-summaries", "POST /api/dialogue/{session_id}/recap", // the recap view
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {
@@ -143,6 +144,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
 		{"GET", "/api/team/paused"}, {"POST", "/api/team/paused/x/release"},
+		{"GET", "/api/dialogue/x/recaps"}, {"GET", "/api/dialogue/x/turn-summaries"}, {"POST", "/api/dialogue/x/recap"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
