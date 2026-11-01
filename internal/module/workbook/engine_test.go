@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/convmodel"
+	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
 )
@@ -47,6 +48,10 @@ func (f *fakeTurns) LastTurns(_ context.Context, _, sid string, n int) ([]convmo
 		ts = ts[len(ts)-n:]
 	}
 	return append([]convmodel.Turn(nil), ts...), nil
+}
+
+func (f *fakeTurns) TurnsFrom(context.Context, string, string, string) (convturns.TurnsFromResult, error) {
+	return convturns.TurnsFromResult{}, nil
 }
 
 func (f *fakeTurns) set(sid string, ts ...convmodel.Turn) {

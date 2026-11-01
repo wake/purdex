@@ -27,3 +27,27 @@ func (m *Module) LastTurns(ctx context.Context, provider, sessionID string, n in
 	}
 	return entry.CopyLastTurns(n), nil // a deep copy: the cache's own model never leaves the package
 }
+
+// TurnsFrom implements convturns.Reader: acquire the session's entry, refresh it from the transcript, take the turn with
+// fromTurnID and the turns after it (all of them when it is empty or gone, Found=false) and release. The turns are a deep
+// copy, and Path is the transcript file the refresh read.
+func (m *Module) TurnsFrom(ctx context.Context, provider, sessionID, fromTurnID string) (convturns.TurnsFromResult, error) {
+	if provider != "claude" {
+		return convturns.TurnsFromResult{}, convturns.ErrUnsupportedProvider
+	}
+	entry, release, err := m.cache.Acquire(ctx, sessionID)
+	if err != nil {
+		return convturns.TurnsFromResult{}, err
+	}
+	defer release()
+	var path string
+	if err := entry.Exclusive(ctx, func() error {
+		var rerr error
+		path, rerr = m.refreshPath(ctx, entry, sessionID)
+		return rerr
+	}); err != nil {
+		return convturns.TurnsFromResult{}, err
+	}
+	turns, found := entry.CopyTurnsFrom(fromTurnID)
+	return convturns.TurnsFromResult{Turns: turns, Found: found, Path: path}, nil
+}
