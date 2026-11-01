@@ -4,6 +4,17 @@
 > 流程：全審。plan 帶 spec 給 codex 審一次 → Sonnet 逐 task TDD → 每張 PR 合併前攻擊方＋對照 spec 的 Sonnet 各一次。
 > 測試分層照 CLAUDE.md：開發中只跑改到的套件（`pdx test go-changed <套件>`）；PR 前改到的套件＋`pdx test lint`，動到鎖或 goroutine 的套件加 `-race`；SPA 用 `vitest related`，tsc 送 mserv。完整套件留給發版。
 > 盤點：`internal/module/workbook` 的保留／拿掉歸類與模組外依賴，見附錄 A（盤點子代理 11-01，file:line 已核對）。
+>
+> **修訂 1**（codex plan review `task-mvxmh6vy-un0w2a`，9 條全數採納）：
+> - 游標加「最後一個已寫 item 的 id」；還有工具在跑的回合先不寫（§1-3，第 1 條）；
+> - 事件不合併，逐個依序處理（§1-7，第 2 條）；
+> - T7 補兩個測試檔（第 3 條）；
+> - T8 補結果狀態分類、重試與 Stop 收斂（第 4、5 條）；
+> - T9 截斷改在字詞邊界、`lines.go` 連測試整檔搬（第 6、7 條）；
+> - T11 白名單測試寫明（第 8 條）；
+> - Reuse §4.1 補 `outcome.go`（第 9 條）。
+>
+> 修正都是針對單條 finding 的局部補充，不再送審。
 
 ## 0. 範圍與 PR
 
@@ -22,9 +33,13 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
    - 回傳從 `fromTurnID` 那一回合（含）起的所有回合、`Found`（`fromTurnID` 是否還在），以及 transcript 的實際路徑（`<source:>` 用）；
    - `fromTurnID` 為空或找不到時回傳整份對話。
    - 現有 `LastTurns(n)` 做不到「從游標起」，也拿不到路徑。
-3. **游標＝（回合 id，該回合已寫的 item 數）**。每次都從游標那一回合重讀。原因是 Claude Code 會把後來的東西接在舊回合上：
+3. **游標＝（回合 id，該回合已寫的 item 數，最後一個已寫 item 的 id）**。每次都從游標那一回合重讀。原因是 Claude Code 會把後來的東西接在舊回合上：
    - 閒置壓縮的分界會接在最後一回合（`ccnorm/system.go:82-101`，壓縮不開新回合）；
    - Stop hook 先到、最後一段 agent 文字晚寫進檔案時，晚到的 item 也接在同一回合。
+   - 新 id 的 item 一律接在回合尾端；已有 id 的 item 原地替換（`ccnorm/normalizer.go:307-330` `upsert`）。所以「已寫幾個」能定位新 item，但已寫過的 item 之後被原地更新（工具結果補上狀態、AskUserQuestion 的答案、子代理結果，`ccnorm/steps.go:175-193`）不會補寫。對策：
+     - 回合裡還有 `Status=running` 的工具時先不寫這一回合（等 transcript 跟上的重試內），逾時才照現況寫。Stop 在工具迴圈結束後才觸發，所以已結束的回合正常不會有 running 的工具；
+     - 寫入前核對 `items[已寫數-1].ID` 等於記下的 id，不等就整個 session 重建（§1-6）；
+     - 已寫 item 之後的原地更新不補寫，這是有意的取捨：會發生的只剩上面逾時的情況。
 4. **第一次記錄一個 session 時，從 transcript 開頭補寫**，含之前的壓縮分段，各段照分界拆開。歷史回合只寫內容，不補產回合摘要（spec §2.1，寫 plan 時補進 spec）。成本是一次性的解析，convfeed 本來就把整份對話放在記憶體。
 5. **回合編號**在回合第一次寫進對話檔時配發，存在 `dlg_turns`（session、turn id → 編號）。重建時沿用已配的編號，所以 recap 的 `turns a–b` 不會變。
 6. **當機與重建**：
@@ -32,7 +47,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
    - 游標那一回合在 transcript 裡找不到（`Found=false`，transcript 被改寫或換檔），也整個 session 重建。
    - 重建＝刪掉這個 session 資料夾裡的段檔，從頭寫一次；PR 2 起把資料庫裡的回合摘要與 recap 依 turn id 放回原位。
    - spec §2.3 原寫「convfeed 開新 epoch 時重建」，寫 plan 時改成上面兩個條件（spec 已同步）：Turn.ID 取自回合第一列的 uuid（`ccnorm/turns.go:30-48` `openTurn`），epoch 換了 id 照樣找得到，就不必重建；真的找不到才重建。
-7. **每個 session 一條工作 goroutine**。訂閱者只把事件丟給該 session 的 worker（容量 1，事件只代表「這個 session 有新的已結束回合」，可以合併），worker 依序處理，處理完閒置一段時間自行結束。等 transcript 跟上 Stop hook 的重試（100 ms × 15）在 worker 內做，不卡住訂閱者。
+7. **每個 session 一條工作 goroutine，事件不合併**。訂閱者只把事件放進該 session 的佇列（上限 16，同工作簿 `maxQueued`，`intake.go:43`；滿了丟掉新的並記錄），worker 依到達順序**逐個**處理，處理完閒置一段時間自行結束。不合併的原因：PR 2 的推播配對要用每個 Stop 自己的 (At, Seq)，而且每個事件處理完都要各自通知推播等待（工作簿 `intake.go:58-66`、`lines.go:49-83`）。等 transcript 跟上的重試（100 ms × 15）在 worker 內做，不卡住訂閱者。
 8. **等 transcript 跟上**沿用工作簿 `adoptEvent` 的判斷，但不把 hook 的文字塞進回合。原因：塞進去的假 item 會讓「已寫 item 數」對不上，真文字晚到時會重複寫。逾時就照檔案現況寫，晚到的部分下次從游標補上。回合摘要（PR 2）要用 hook 文字當備援時，另外傳給 job。
 9. **只寫已結束的回合**：遇到第一個仍在跑的回合就停；事件指到的那一回合即使還顯示 running，也當成已結束。
 10. **接力的前後段互指**：新 session 開第一段時，`<prev:>` 指向前任（`team.PredecessorReader`）的最後一段；前任的最後一段若在資料庫裡，補寫一行 `<next: …>` 指回來。前任沒記錄過就寫 `<prev: none>`。
@@ -97,7 +112,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 
 - 照 `workbook/store.go:100-124` 的樣式開檔（0600、WAL、busy_timeout、sidecar 權限）。
 - 表：
-  - `dlg_sessions(session_id PK, segment INT, seg_bytes INT, cursor_turn TEXT, cursor_items INT, next_turn_no INT, source_path TEXT, created_at, updated_at)`
+  - `dlg_sessions(session_id PK, segment INT, seg_bytes INT, cursor_turn TEXT, cursor_items INT, cursor_item_id TEXT, next_turn_no INT, source_path TEXT, created_at, updated_at)`
   - `dlg_turns(session_id, turn_id, turn_no INT, segment INT, ended_at INT, PRIMARY KEY(session_id, turn_id))`
 - 方法：`Session(sid)`、`Commit(sid, state, newTurns)`（一個交易內更新游標、位元組數、配發的編號）、`TurnNo(sid, turnID)`、`ResetForRebuild(sid)`（清游標與段號，保留 `dlg_turns`）。
 - migration 用 `user_version`，從 1 開始（之後 PR 2 加表用 2）。
@@ -108,14 +123,22 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 
 - `writer.go`：`Write(sid string, res convturns.TurnsFromResult, target string) error`，依 §1-3～§1-6：
   1. 讀 session 狀態；沒有狀態＝第一次，從 `001.md` 開始寫檔頭，然後寫全部回合。
-  2. 段檔比 `seg_bytes` 長就截回 `seg_bytes`；比較短或不存在，或 `cursor_turn` 有值但 `Found=false`，就重建。
-  3. 從游標回合的第 `cursor_items` 個 item 接著寫，之後的回合從頭寫；遇到第一個仍在跑、且不是 `target` 的回合就停。
+  2. 段檔比 `seg_bytes` 長就截回 `seg_bytes`；比較短或不存在、`cursor_turn` 有值但 `Found=false`、或游標回合第 `cursor_items` 個 item 的 id 不等於 `cursor_item_id`，就重建。
+  3. 從游標回合的第 `cursor_items` 個 item 接著寫，之後的回合從頭寫；遇到第一個仍在跑、且不是 `target` 的回合就停；回合裡還有 running 的工具時也停（§1-3，逾時由 intake 傳 `force` 進來才照寫）。
   4. 遇到壓縮分界：舊段寫 `<compacted | trigger>` 與 `<next: 新段路徑>`，開新段，寫 `<prev: 舊段>`、`<source: …>`（PR 2 起再加 `<carried recap>`）。分界之後的 item 寫進新段。
   5. 每寫完一回合就 Commit（游標、位元組數、新回合的編號）。
 - 檔頭：第一段 `<prev:>` 依 §1-10；`<source:>` 用 `TurnsFromResult.Path`。
 - 寫檔：`O_APPEND`；資料夾 0700、檔案 0600（內容是對話原文）。
 - 給 PR 2 的接點：`Hooks{Carried func(sid) string; Placed func(sid, turnID) []string}`，PR 1 都回空。
-- 測試清單：第一次寫（含 compact fixture → 兩段、各有 prev／next）；同一事件重複送不重寫；游標回合後來多了 item（模擬閒置壓縮接在舊回合）→ 換段且新回合進新段；當機模擬（檔案比 seg_bytes 長）→ 截回後照寫；檔案被刪 → 重建且編號不變；`Found=false` → 重建；running 回合停住、target 例外；接力：前任有記錄時前任最後一段補 `<next:>`、新段 `<prev:>` 指過去。
+- 測試清單：
+  1. 第一次寫（含 compact fixture → 兩段、各有 prev／next）；
+  2. 同一事件重複送不重寫；
+  3. 游標回合後來多了 item（模擬閒置壓縮接在舊回合）→ 換段且新回合進新段；
+  4. 當機模擬（檔案比 seg_bytes 長）→ 截回後照寫；
+  5. 檔案被刪 → 重建且編號不變；`Found=false` → 重建；游標 item id 對不上 → 重建；
+  6. running 回合停住、target 例外；
+  7. 回合裡有 running 的工具 → 不寫；同一回合的工具結果到了（item 原地更新成 done、帶答案）→ 寫出來且有 `<answer | …>`；`force` 時照現況寫；
+  8. 接力：前任有記錄時前任最後一段補 `<next:>`、新段 `<prev:>` 指過去。
 - 「需要判斷」的理由：換段、截回、重建三者的交錯，以及「先寫檔、後 Commit」的順序，錯了會靜默重複或遺失內容。task 完成後派新 context 的 Sonnet 審。
 - 驗收：測試先紅後綠；對換段與截回的條件做突變，都有測試失敗。
 
@@ -124,7 +147,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 - `intake.go`：訂閱 turn end；每個 session 一個 worker（§1-7）；worker 呼叫 `TurnsFrom`（`ErrBusy` 重試 3 次、間隔同工作簿 `busyDelay`），做「等 transcript 跟上」（§1-8：100 ms × 15），再交給 writer。
 - `module.go`：`Name()="dialogue"`；`Dependencies()` ＝ agent、conversation、team；`Init` 開 `dialogue.db`（失敗只記錄、模組不就緒，不擋 daemon，同工作簿）；`Start` 訂閱；`Stop` 退訂並等 worker 結束；`Close` 關 db。`Status()` 回 `ready`、`init_error`。
 - `cmd/pdx/main.go` 註冊模組（工作簿旁邊）。
-- 測試清單：假的 turn-end 來源送兩個 session 的事件 → 各自寫檔、互不阻塞；同 session 連續 5 個事件只處理必要次數且順序正確；`ErrBusy` 重試後成功；transcript 落後 Stop（最後回合 running、沒有文字）→ 等到跟上才寫；逾時照現況寫，後來補上的文字下次寫進同一回合；Stop 後模組不再寫檔（`-race`）。
+- 測試清單：假的 turn-end 來源送兩個 session 的事件 → 各自寫檔、互不阻塞；同 session 在 worker 忙碌時連續到 5 個事件 → 5 個都依到達順序處理、各自帶原本的 (At, Seq)（PR 2 會在每個事件後通知推播等待，這裡先用測試替身記錄呼叫）；佇列滿 16 時新事件被丟掉且有記錄；`ErrBusy` 重試後成功；transcript 落後 Stop（最後回合 running、沒有文字）→ 等到跟上才寫；逾時照現況寫，後來補上的文字下次寫進同一回合；Stop 後模組不再寫檔（`-race`）。
 - 「需要判斷」的理由：goroutine 生命週期與關機順序。task 完成後派新 context 的 Sonnet 審。
 - 驗收：測試先紅後綠，`-race` 跑 dialogue 套件。
 
@@ -163,6 +186,8 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 |---|---|---|---|---|
 | 派工佇列、租約、每小時上限、reaper | `internal/module/workbook/queue.go` `Engine.enqueue／admit／Next／Result／reap`（:168-561） | new（照基準改寫，§4.0-2） | 原檔混著 journal／refresh／rewrite | 盤點 §1.2、§7-3～§7-5 |
 | 結果驗證骨架 | `workbook/validate.go` `objectOf`／`hasDuplicateMember`／`stripFence`／`repairPush`／`cutRunes`（:55-308） | new（搬入改寫） | 欄位不同（7 → 4），骨架照用 | 盤點 §1.2 validate 列 |
+| 未回答的結果分類與格式重試 | `workbook/outcome.go` `failedCall`（:94-121）、`formatFailure`（:124-131）；理由常數 `engine.go:14-23` | new（搬入，拿掉 `nothing-to-fork`） | spec §3 要求格式錯重試一次；分類決定摘要的 state／reason | `outcome.go:94-131` |
+| Stop 收斂 | `workbook/queue.go` `Engine.Stop`（:512-543） | new（搬入） | leased → failed(stopped)、queued → skipped(stopped)、喚醒長輪詢、等進行中的結果，推播等待才不會等到逾時 | 同左 |
 | 回合輸入 | `workbook/input.go` `buildTurnPart`（:91-114）、上限常數（:14-18） | new（搬入） | spec §3：上限與遮蔽沿用 | 同左 |
 | 推播等待 | `workbook/lines.go` `PushLines`（:26-123） | new（搬入，資料源換成 `dlg_summaries`） | 等待邏輯不變 | 盤點 §1.1 |
 | mod 路由與能力判定 | `internal/modevents/workbook_routes.go` `WorkbookService`、`workbookNext`、`workbookResult`、`streamMayPoll` | reuse（介面拿掉 `RequestRefresh`） | mod 不改 | 盤點 §3.1 |
@@ -182,6 +207,8 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   - `cmd/pdx/device_scope.go:82-92` 拿掉工作簿與日誌路由，`device_scope_test.go:79-81` 跟著改；
   - `internal/modevents/workbook_routes.go`：`WorkbookService` 拿掉 `RequestRefresh`；`workbookRefresh` 一律回 409 `disabled`（§4.0-3）；`ErrNotLive`、`ErrRefreshPending` 沒有使用者就刪；
   - `internal/module/peers/personas_pool_test.go:134` 改用 `ipeers.PoolNameOf`＋`ipeers.PoolDisplayName` 斷言，語意不變；
+  - `cmd/pdx/workbook_register_test.go`（斷言 `workbook.db` 與 `/api/info` 的 `workbook.v1`）刪除，T11 另寫 dialogue 的同類測試；
+  - `internal/modevents/workbook_refresh_test.go` 的假 service 與 202／`not_live`／`refresh_pending` 斷言，改成「一律 409 `disabled`」，並保留「只宣告 `workbook.refresh` 的 stream 仍可輪詢 `next`」的斷言；
   - `internal/module/team/last_turn.go`、`internal/personas`、`internal/redact` 等只有註解提到工作簿的地方不動。
 - 這個 commit 之後的狀態：沒有人註冊 `workbook.jobs` 與 `workbook.push-lines`，mod 的 `next` 拿到 503、推播走沒有工作簿時的原文（`internal/module/push/agent_trigger.go:307-319`）。中間 commit 不部署。
 - 驗證：
@@ -198,7 +225,9 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   - 每主機每小時 300 次上限（`admit`，`queue.go:236`）；
   - 租約＝timeout＋10 s、過期回收、結果寫入失敗的重試（`settle.go`）；
   - `Next` 的長輪詢、結果核對 stream 與租約；
-  - `Complete{Model:"haiku", MaxTokens, Effort:"low", TimeoutMS:30000}`。
+  - `Complete{Model:"haiku", MaxTokens, Effort:"low", TimeoutMS:30000}`；
+  - 未回答的結果分類（`outcome.go:94-121`）：`empty-reply` 與格式錯重試一次（attempt 2，同種類），再錯 failed(format)；`api-error` 帶 `authentication_failed` → failed(auth)，其他 → failed(api)；`aborted` 依耗時分 failed(timeout)／failed(stopped)；`refused` → failed(refused)；其他 → failed(api)；
+  - Stop 收斂（`queue.go:512-543`）：未在處理中的租約 → failed(stopped)，排隊中 → skipped(stopped)，喚醒所有長輪詢，之後的結果找不到租約，等已開始的結果與回收做完才返回。
 - 拿掉：rewrite、refresh、journal、fork、`then`／`followAfterLoss`、`OnAvailability`。
 - job 種類：`turn-summary`（線上 `turn`）、`recap`（線上 `turn`）。`Job.MarshalJSON` 兩者都寫成 `turn`。
 - `jobs.go`：在 registry 註冊 `workbook.jobs`，實作 `modevents.WorkbookService`（`NextJob`、`JobResult`、`JobWaiting`）與 `Ready()`；`capable` 用 modevents registry 的 `SessionCapable(sid, "workbook.v2", CapsFresh)`。
@@ -211,7 +240,8 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   5. 租約過期被回收，job 回到 failed（timeout）；
   6. 結果處理函式寫入失敗，reaper 重試；
   7. mod 不 capable 的 session 不排 job；
-  8. `Stop` 之後 `Next` 立刻回空、沒有 goroutine 留下（`-race`）。
+  8. 結果分類：`empty-reply` 第一次排 attempt 2、第二次 failed(format)；`authentication_failed`、其他 `api-error`、`aborted`（逾時與未逾時）、`refused`、未知理由各自得到上面的 reason；
+  9. Stop：排隊中的 → skipped(stopped)、已租出的 → failed(stopped)、等待中的長輪詢立刻返回、Stop 之後送來的結果得到 `ErrNotLeased`、Stop 等到進行中的結果寫完才返回、之後 `Next` 立刻回空、沒有 goroutine 留下（`-race`）。
 - 「需要判斷」的理由：鎖、租約、goroutine。完成後派新 context 的 Sonnet 對照基準檔審，重點是有沒有漏掉保留的行為。
 - 驗收：測試先紅後綠；dialogue 套件 `-race`；`./internal/modevents/...` 綠。
 
@@ -230,17 +260,23 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 - 驗證：
   - 單一 JSON 物件，允許一層 code fence，四欄必填（`skip`、`title`、`push`、`summary`），不得有重複欄位或多餘內容；
   - 非 skip 時 `title`、`summary` 不可空；
-  - 每欄先 `redact.String`；`title` 截 16 字；`push` 用工作簿的 `repairPush`（40 字，在最後一個標點截，截不出來就丟掉、推播用原文）；`summary` 超過 150 字就在 150 字內最後一個句號截，沒有句號就硬截加「…」；
-  - 格式錯重試一次（attempt 2），再錯記 failed（format）。
+  - 每欄先 `redact.String`；
+  - 超過上限一律在字詞邊界截斷（spec §3）：新增 `cutAtWord(s, n)`，先取前 n 個字，若切點落在連續的英數字、`_`、`.`、`/`、`-` 中間，就退到那一串的開頭；退完剩不到 n 的一半才在 n 硬切。中文字之間都算字詞邊界；
+  - `title` 16 字，用 `cutAtWord`，不加省略號；`push` 用工作簿的 `repairPush`（40 字，在最後一個標點截，截不出來就丟掉、推播用原文）；`summary` 150 字，先找 150 字內最後一個句號，沒有就 `cutAtWord` 加「…」；
+  - 格式錯重試一次（attempt 2），再錯記 failed（format），沿用 T8 的分類。
 - 寫入（一個交易）：state done／skipped、四欄、`push_ready_at`、用量；done 且非 skip 時 `since_recap + 1`。交易成功後：
   1. 對話檔接上 `<turn-summary N · HH:MM | title>` 與內文（N＝`dlg_turns.turn_no`，HH:MM＝`turn_at` 的本地時間）；
   2. 喚醒推播等待；
   3. `since_recap ≥ 30` 時排一個 recap（T10）。
-- 推播等待：`lines.go` 搬入，`ClosestTurn` 改查 `dlg_summaries`（`turn_at` 在 [since−2000, since+500]，取最近），規則照原樣（`lines.go:100-112`），註冊在 `workbook.push-lines`。
+- 推播等待：基準的 `lines.go` 與 `lines_test.go` **整檔搬入**，只把 store 換成查 `dlg_summaries` 的介面（`ClosestTurn`：`turn_at` 在 [since−2000, since+500]，取最近）。其餘不改，包括：
+  - intake 窗口 `intakeBeforeMS=1500`；
+  - 每 session 最多 8 個 intake 時間、最多 64 個 session；
+  - 先 snapshot 再查 store，避免漏掉喚醒（`lines.go:15-20,49-100`）。
+  - 註冊在 `workbook.push-lines`。搬入後 `lines_test.go` 原有案例照過，再加查 `dlg_summaries` 的案例。
 - `Start` 把上次留下的 pending 標成 failed（stopped），否則重啟後推播要等到逾時（盤點 §7-13）。
 - 重建：writer 的 `Placed` 接點回傳該回合的摘要文字（§4.0-7）。
 - 測試清單：
-  1. 驗證的表格測試：四欄齊全、少一欄、多一欄、重複欄位、code fence、skip、空 title、各欄超長截斷、push 截不出來被丟掉；
+  1. 驗證的表格測試：四欄齊全、少一欄、多一欄、重複欄位、code fence、skip、空 title、各欄超長截斷、push 截不出來被丟掉；`cutAtWord` 對英文單字、路徑、PR 編號、中英混合、整串英數字超過一半長度各一列；
   2. 第一次記錄的 session 只產事件那一回合；
   3. 一次 5 回合只產最新 3 則；
   4. 不 capable 記 skipped；
@@ -287,8 +323,11 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   - `POST /api/dialogue/{session_id}/recap`：回 `{"state":"queued"|"up_to_date"|"unavailable"}`。
 - session_id 格式不合回 400；模組沒就緒回 503。
 - `/api/info`：dialogue 模組 ready 時宣告 `dialogue.v1`。測試要用真的模組註冊再打 `/api/info`（不是替身）。
-- `cmd/pdx/device_scope.go`：三條路由加進白名單，測試跟著改。
-- 測試清單：各路由的正常、空、分頁上限、400、503；POST 三種 state；`/api/info` 有 `dialogue.v1`、沒有 `workbook.v1`。
+- `cmd/pdx/device_scope.go`：三條路由加進白名單（T7 已拿掉舊的）。
+- 測試清單：
+  1. 各路由的正常、空、分頁上限、400、503；POST 三種 state；
+  2. `/api/info` 有 `dialogue.v1`、沒有 `workbook.v1`、`workbook.v2`、`journal.*`（真模組註冊，取代 T7 刪掉的 `workbook_register_test.go`）；
+  3. device token：三條 dialogue 路由放行；T7 拿掉的每一條工作簿與日誌路由都被拒（逐條列）。
 - 驗收：測試先紅後綠。
 
 ### T12. PR 2 驗收
