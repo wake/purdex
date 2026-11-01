@@ -19,11 +19,11 @@ import { PanelRow } from './TeamPanelRow'
 import { TeamSettingsBlock } from './TeamSettingsBlock'
 import { offersAny, useTeamSettingsOffer } from './team-settings'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { seatLabel, seatName, usePersonaRevision } from '../../lib/names/seat'
+import { usePersonaRevision } from '../../lib/names/seat'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
