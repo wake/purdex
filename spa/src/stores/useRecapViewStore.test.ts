@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useRecapViewStore, openRecapView, isRecapOpen, type RecapTarget } from './useRecapViewStore'
 import { useTeamUiStore } from './useTeamUiStore'
+import { useTabStore } from './useTabStore'
 
 const team: RecapTarget = { scope: 'h1\u0000t1', teamKey: 'h1\u0000t1', hostId: 'h1', sessionId: 'A', title: 'a', address: '' }
 const solo: RecapTarget = { scope: 'tab-9', teamKey: null, hostId: 'h1', sessionId: 'S', title: 's', address: '' }
@@ -48,5 +49,50 @@ describe('useRecapViewStore', () => {
     openRecapView(solo)
     expect(useTeamUiStore.getState().sharedPanelMode).toBe('full')
     expect(useRecapViewStore.getState().open).toEqual(solo)
+  })
+})
+
+describe('the view closes with its panel (prototype: teamUp / teamBtn / perUp / perBtn / switchTab)', () => {
+  const open = () => useRecapViewStore.getState().open
+
+  it('a team panel folded into the title bar closes the view; putting it back shows the normal panel', () => {
+    openRecapView(team)
+    expect(open()).toEqual(team)
+    useTeamUiStore.getState().setPanelMode(team.teamKey!, 'titlebar')
+    expect(open()).toBeNull()
+    useTeamUiStore.getState().setPanelMode(team.teamKey!, 'full')
+    expect(open()).toBeNull()
+  })
+
+  it('another team going to the title bar leaves it open', () => {
+    openRecapView(team)
+    useTeamUiStore.getState().setPanelMode('h1\u0000other', 'titlebar')
+    expect(open()).toEqual(team)
+  })
+
+  it('the one-line form keeps the view (the prototype keeps it too)', () => {
+    openRecapView(team)
+    useTeamUiStore.getState().setPanelMode(team.teamKey!, 'line')
+    expect(open()).toEqual(team)
+  })
+
+  it('a personal panel folded into the title bar closes the view', () => {
+    useTabStore.setState({ activeTabId: solo.scope })
+    openRecapView(solo)
+    expect(open()).toEqual(solo)
+    useTeamUiStore.getState().setSharedPanelMode('titlebar')
+    expect(open()).toBeNull()
+  })
+
+  it('switching tabs closes a personal view (not a team one); coming back shows the card', () => {
+    useTabStore.setState({ activeTabId: solo.scope })
+    openRecapView(solo)
+    useTabStore.setState({ activeTabId: 'tab-other' })
+    expect(open()).toBeNull()
+    useTabStore.setState({ activeTabId: solo.scope })
+    expect(open()).toBeNull()
+    openRecapView(team)
+    useTabStore.setState({ activeTabId: 'tab-x' })
+    expect(open()).toEqual(team)
   })
 })

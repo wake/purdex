@@ -1,8 +1,11 @@
 // spa/src/stores/useRecapViewStore.ts — which session's recap history the panel area shows (plan T14b). One value for the window, never persisted
-// (a reload or a tab switch comes back to the normal panel). `scope` says where the view sits: a team's key for a team seat (also an ended one), the
+// (a reload comes back to the normal panel). `scope` says where the view sits: a team's key for a team seat (also an ended one), the
 // tab id for a personal session; the panel area shows the view only where its own scope matches.
+// The view closes with its panel, as in the prototype: the team's panel (or the shared personal one) folded into the title bar closes it, and so does
+// switching the active tab away from a personal session's. The one-line form keeps it (the area draws it only in the full form).
 import { create } from 'zustand'
 import { useTeamUiStore } from './useTeamUiStore'
+import { useTabStore } from './useTabStore'
 
 export interface RecapTarget {
   scope: string
@@ -40,3 +43,16 @@ export function openRecapView(target: RecapTarget): void {
   }
   useRecapViewStore.getState().show(target)
 }
+
+// Close the view when the panel it sits in goes away.
+useTeamUiStore.subscribe((ui) => {
+  const open = useRecapViewStore.getState().open
+  if (open === null) return
+  const mode = open.teamKey !== null ? ui.panelMode[open.teamKey] ?? 'full' : ui.sharedPanelMode
+  if (mode === 'titlebar') useRecapViewStore.getState().close()
+})
+useTabStore.subscribe((tabs, prev) => {
+  if (tabs.activeTabId === prev.activeTabId) return
+  const open = useRecapViewStore.getState().open
+  if (open !== null && open.teamKey === null && open.scope !== tabs.activeTabId) useRecapViewStore.getState().close()
+})
