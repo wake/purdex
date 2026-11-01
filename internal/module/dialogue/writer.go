@@ -183,6 +183,67 @@ func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string,
 	return w.run(sid, res, target, force, &st)
 }
 
+// AppendMarker puts one block (a turn summary, T9; PR 2's recap uses it too) at the end of the session's current segment,
+// set off by a blank line, and records the new size so the next Write does not take it for crash residue. The cursor is
+// not moved. It does nothing (logged) for a session with no file yet, a file shorter than recorded (the next Write
+// rebuilds and Placed puts the block back) and a session being rebuilt (the rebuild's Placed covers it).
+func (w *Writer) AppendMarker(sid, text string) error {
+	if _, err := w.sessionDir(sid); err != nil {
+		return err
+	}
+	l := w.lockFor(sid)
+	l.Lock()
+	defer l.Unlock()
+
+	st, has, err := w.store.Session(sid)
+	if err != nil {
+		return err
+	}
+	if !has || st.SegBytes == 0 {
+		w.log("[dialogue] session %s has no segment yet: a marker is not appended", sid)
+		return nil
+	}
+	if st.Rebuilding {
+		w.log("[dialogue] session %s is being rebuilt: a marker is left to the rebuild", sid)
+		return nil
+	}
+	path := w.segPath(sid, st.Segment)
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.log("[dialogue] session %s: segment %d is gone: a marker is not appended", sid, st.Segment)
+			return nil
+		}
+		return fmt.Errorf("stat dialogue segment: %w", err)
+	}
+	if fi.Size() < st.SegBytes {
+		w.log("[dialogue] session %s: segment %d is shorter than recorded: a marker is not appended", sid, st.Segment)
+		return nil
+	}
+	if fi.Size() > st.SegBytes { // bytes written but never committed (a crash): cut them off, as Write does
+		if err := os.Truncate(path, st.SegBytes); err != nil {
+			return fmt.Errorf("repair dialogue segment: %w", err)
+		}
+	}
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	block := "\n" + text
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, fileMode)
+	if err != nil {
+		return fmt.Errorf("append dialogue segment: %w", err)
+	}
+	_, err = f.WriteString(block)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("append dialogue segment: %w", err)
+	}
+	st.SegBytes += int64(len(block))
+	return w.store.Commit(sid, st, nil)
+}
+
 func (w *Writer) removeSegments(sid string) error {
 	matches, _ := filepath.Glob(filepath.Join(w.root, sid, "*.md"))
 	for _, m := range matches {
