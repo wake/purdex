@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.778] - 2026-11-02
+
+> **修正 777 的 App 看不到團隊面板、個人面板與 recap 歷史。** 只有 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。daemon、mod、wwd 都沒改：不用部署 daemon、不用跑 `pdx setup`、不重裝 wwd。依賴沒變，不用 `pnpm install`。
+
+### Fixed
+
+- **團隊面板與個人面板又看得到了（#3980）**：777 拿掉團隊日誌時，把外殼掛載面板區的那一行也一起拿掉了（它原本跟日誌卡片放在同一個元件裡）。結果面板的單行與完整形式、以及裡面的 recap 歷史都不會顯示：按標題列的 recap 時鐘，或把面板移出標題列，都只會讓標題列那一條收起。現在掛回原位，並加了從外殼掛起的測試。
+
+### Internal
+
+- **`internal/gate` 測試不再受暫存路徑長度影響（#3978）**：`TestWouldWait_AllSlotsTakenSaysWhoAndHowLong` 原本在指令結尾找標記，但持有者訊息只保留指令前 100 字，wwd 工作目錄的暫存路徑太長時會被截掉。777 的發版閘門在 mlab 因此失敗。只改測試。
+
 ## [1.0.0-alpha.777] - 2026-11-02
 
 > **對話檔、回合摘要與 recap 取代 session 工作簿與團隊日誌。** daemon 與 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。mod 沒改，**部署不用跑 `pdx setup`**；wwd 沒改，這版不重裝 wwd。依賴沒變，不用 `pnpm install`。
