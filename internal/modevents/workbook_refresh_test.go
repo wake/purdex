@@ -2,7 +2,6 @@ package modevents
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -30,53 +29,34 @@ func refreshBody(stream, sid string) string {
 	return string(b)
 }
 
-// 202 with the entry id; the daemon is asked with the caller's stream and session.
-func TestWorkbookRefresh_Accepted(t *testing.T) {
-	f := &fakeWB{refreshID: 42}
-	rec := post(t, refreshHandler(f), http.MethodPost, WorkbookRefreshPath, refreshBody(testStream, testSID))
-	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"entry_id":42`) {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
-	}
-	if len(f.refreshAsked) != 1 || f.refreshAsked[0] != testStream+"/"+testSID {
-		t.Fatalf("asked = %v", f.refreshAsked)
-	}
-}
-
-// The two 409s; anything else is a 500.
-func TestWorkbookRefresh_Conflicts(t *testing.T) {
-	for _, c := range []struct {
-		err  error
-		code int
-		body string
-	}{
-		{ErrNotLive, http.StatusConflict, "not_live"},
-		{ErrRefreshPending, http.StatusConflict, "refresh_pending"},
-		{errors.New("boom"), http.StatusInternalServerError, "internal"},
-	} {
-		rec := post(t, refreshHandler(&fakeWB{refreshErr: c.err}), http.MethodPost, WorkbookRefreshPath, refreshBody(testStream, testSID))
-		if rec.Code != c.code || !strings.Contains(rec.Body.String(), c.body) {
-			t.Fatalf("%v: %d %s", c.err, rec.Code, rec.Body.String())
+// Refresh is retired: every well-formed request is a 409 "disabled", whatever the stream announced and whether or not the
+// workbook service is there. The daemon is never asked (the service has no refresh method any more).
+func TestWorkbookRefresh_AlwaysDisabled(t *testing.T) {
+	nilSvc := NewHandler(refreshReg(), WithWorkbook(func() WorkbookService { return nil }))
+	for name, h := range map[string]http.Handler{"service": refreshHandler(&fakeWB{}), "no service": nilSvc, "no workbook option": NewHandler(refreshReg())} {
+		for sname, body := range map[string]string{
+			"refresh-capable stream": refreshBody(testStream, testSID),
+			"v2 only":                refreshBody("Zz9_-other1", testSID),
+			"other session":          refreshBody(testStream, "99999999-aaaa-bbbb-cccc-dddddddddddd"),
+			"unknown":                refreshBody("Zz9_-unknown", testSID),
+		} {
+			rec := post(t, h, http.MethodPost, WorkbookRefreshPath, body)
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"error":"disabled"`) {
+				t.Fatalf("%s / %s: %d %s", name, sname, rec.Code, rec.Body.String())
+			}
 		}
 	}
 }
 
-// A stream that did not announce workbook.refresh (a WB-1c mod), or is not the session's, never reaches the daemon: 409
-// not_live. Mutation gate: drop the StreamCapable check → red.
-func TestWorkbookRefresh_OnlyARefreshCapableStreamOfTheSession(t *testing.T) {
-	f := &fakeWB{refreshID: 1}
-	h := refreshHandler(f)
-	for name, body := range map[string]string{
-		"v2 only":       refreshBody("Zz9_-other1", testSID),
-		"other session": refreshBody(testStream, "99999999-aaaa-bbbb-cccc-dddddddddddd"),
-		"unknown":       refreshBody("Zz9_-unknown", testSID),
-	} {
-		rec := post(t, h, http.MethodPost, WorkbookRefreshPath, body)
-		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not_live") {
-			t.Fatalf("%s: %d %s", name, rec.Code, rec.Body.String())
-		}
-	}
-	if len(f.refreshAsked) != 0 {
-		t.Fatalf("the daemon was asked: %v", f.refreshAsked)
+// A stream that announced only workbook.refresh (an older mod) may still poll `next`: CapWorkbookRefresh stays in streamMayPoll.
+func TestWorkbookNext_RefreshOnlyStreamStillPolls(t *testing.T) {
+	reg := NewRegistry(time.Now)
+	_, _ = reg.Apply(Batch{V: 1, Stream: "Refr-0001", Agent: "cc", Caps: []string{CapWorkbookRefresh},
+		Events: []Event{{Seq: 1, SID: testSID, Type: "heartbeat", Data: json.RawMessage(`{}`)}}})
+	f := &fakeWB{job: map[string]string{"id": "j1"}}
+	h := NewHandler(reg, WithWorkbook(func() WorkbookService { return f }))
+	if rec := post(t, h, http.MethodPost, WorkbookNextPath, nextBody("Refr-0001", testSID, 0)); rec.Code != http.StatusOK {
+		t.Fatalf("a refresh-only stream: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -93,10 +73,6 @@ func TestWorkbookRefresh_Validation(t *testing.T) {
 	}
 	if rec := post(t, h, http.MethodGet, WorkbookRefreshPath, ""); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("get: %d", rec.Code)
-	}
-	nilSvc := NewHandler(refreshReg(), WithWorkbook(func() WorkbookService { return nil }))
-	if rec := post(t, nilSvc, http.MethodPost, WorkbookRefreshPath, refreshBody(testStream, testSID)); rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("no service: %d", rec.Code)
 	}
 }
 

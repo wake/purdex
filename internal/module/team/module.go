@@ -589,7 +589,6 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(team.LeadNoticerKey, team.LeadNoticer(m))               // the lease notice outbox's fallback (lease v2 P2d-2)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
-	c.Registry.Register(team.JournalFeedKey, team.JournalFeed(store)) // the workbook journal's tasks, reports and teams (J-0a)
 	return nil
 }
 

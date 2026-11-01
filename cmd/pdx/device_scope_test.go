@@ -76,9 +76,6 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
 		"POST /api/agent/upload",
-		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
-		"GET /api/workbook/conversations/{provider}/{session_id}/todos", // not the refresh: that is the Mac App's
-		"GET /api/journal", "GET /api/journal/tasks", "GET /api/journal/roadmap", "PUT /api/journal/confirm", "GET /api/journal/members", // the workbook journal (iOS later)
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {
@@ -129,7 +126,8 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"POST", "/api/pool/jobs"}, {"DELETE", "/api/pool/jobs/j_abc"}, {"POST", "/api/pool/jobs/j_abc/cancel"}, {"POST", "/api/pool/jobs/j_abc/position"}, // the jobs are read here, never changed (cancel and position are the admin's: jobs.control.v1)
 		{"PUT", "/api/pool/hosts/air26/worker"}, {"POST", "/api/pool/hosts/air26/exceptions"}, {"DELETE", "/api/pool/hosts/air26/exceptions/pkg"}, // changing a host's worker is the admin's, not a phone's
 		{"GET", "/api/pool/hosts/air26/observations"}, {"GET", "/api/pool/hosts/air26/undeclared"}, // redacted command lines: the admin's until a phone's event page is decided (pool.observations.v1)
-		{"POST", "/api/journal"}, {"PUT", "/api/journal/pin"}, {"GET", "/api/journal/confirm"}, {"DELETE", "/api/journal/confirm"}, {"PUT", "/api/journal/members"}, {"GET", "/api/journal/other"}, // only the five journal routes
+		{"GET", "/api/workbook/conversations/claude/sid"}, {"GET", "/api/workbook/entries"}, {"GET", "/api/workbook/conversations/claude/sid/todos"}, // the workbook is gone
+		{"GET", "/api/journal"}, {"GET", "/api/journal/tasks"}, {"GET", "/api/journal/roadmap"}, {"PUT", "/api/journal/confirm"}, {"GET", "/api/journal/members"}, // so is the journal
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
@@ -145,7 +143,6 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
 		{"GET", "/api/team/paused"}, {"POST", "/api/team/paused/x/release"},
-		{"GET", "/api/journal"}, {"GET", "/api/journal/tasks"}, {"GET", "/api/journal/roadmap"}, {"PUT", "/api/journal/confirm"}, {"GET", "/api/journal/members"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
