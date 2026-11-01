@@ -207,3 +207,55 @@ describe('forgetHost', () => {
     expect(selectDialogueSupport('h2')).toBe(true)
   })
 })
+
+describe('connection fence (setSupport(false) drops what is still out)', () => {
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
+
+  it('a recaps GET that lands after setSupport(false) is dropped; one sent after setSupport(true) lands', async () => {
+    const d = deferred<RecapsResponse>()
+    fetchRecaps.mockReturnValueOnce(d.promise)
+    const p = st().loadRecaps('h1', 'S1')
+    st().setSupport('h1', false)
+    st().setSupport('h1', true) // reconnected before the old answer came: still the old connection's answer
+    d.resolve(resp([recap(1)]))
+    await p
+    expect(entry()?.recaps ?? null).toBeNull()
+    expect(entry()?.loading).toBe(false)
+    fetchRecaps.mockResolvedValueOnce(resp([recap(2)]))
+    await st().loadRecaps('h1', 'S1')
+    expect(entry()?.recaps?.recaps.map((r) => r.id)).toEqual([2])
+  })
+
+  it('a turn-summaries GET that lands after setSupport(false) is dropped', async () => {
+    const d = deferred<TurnSummary[]>()
+    fetchTurnSummaries.mockReturnValueOnce(d.promise)
+    const p = st().loadLatestSummaries('h1', 'S1', 5)
+    st().setSupport('h1', false)
+    st().setSupport('h1', true)
+    d.resolve([turn(1)])
+    expect(await p).toEqual([])
+    expect(entry()?.summaries ?? {}).toEqual({})
+  })
+
+  it('a POST that answers queued after setSupport(false) does not mark generating', async () => {
+    const d = deferred<string>()
+    requestRecap.mockReturnValueOnce(d.promise)
+    const p = st().regenerate('h1', 'S1', 'manual')
+    st().setSupport('h1', false)
+    st().setSupport('h1', true)
+    d.resolve('queued')
+    await p
+    expect(entry()?.generating ?? false).toBe(false)
+  })
+
+  it('setSupport(false) clears generating on every entry of the host and leaves other hosts', async () => {
+    st().setSupport('h2', true)
+    requestRecap.mockResolvedValue('queued')
+    await st().regenerate('h1', 'S1', 'manual')
+    await st().regenerate('h2', 'S1', 'manual')
+    expect(entry()?.generating).toBe(true)
+    st().setSupport('h1', false)
+    expect(entry()?.generating).toBe(false)
+    expect(entry('h2')?.generating).toBe(true)
+  })
+})

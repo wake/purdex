@@ -7,7 +7,7 @@
 //   * `regenerate` → `queued` marks the session "generating" until a recap newer than the newest one cached at request time
 //     is loaded, or a `dialogue.recap` event arrives (`applyRecapEvent` clears the mark and re-reads the recaps, but only
 //     for a session the store already holds).
-//   * A fetch that lands after its host was forgotten is dropped (`epoch`).
+//   * A request that lands after its host was forgotten, or after support went away (disconnect, probe), is dropped (`epoch`).
 import { create } from 'zustand'
 import { fetchRecaps, fetchTurnSummaries, requestRecap } from '../lib/dialogue/api'
 import type { RecapsResponse, RecapState, RecapTrigger, TurnRange, TurnSummary } from '../lib/dialogue/types'
@@ -29,7 +29,7 @@ export type RegenerateOutcome = RecapState | 'unsupported' | 'error'
 interface DialogueState {
   support: Record<string, boolean>
   byHost: Record<string, Record<string, DialogueEntry>>
-  /** Bumped by `forgetHost`: tells a fetch still out that its host was forgotten. */
+  /** Bumped by `forgetHost` and `setSupport(false)`: tells a request still out that its host was forgotten or its connection went away. */
   epoch: Record<string, number>
 
   setSupport: (hostId: string, supported: boolean) => void
@@ -69,7 +69,8 @@ function withEntry(s: DialogueState, hostId: string, sessionId: string, fn: (e: 
 }
 
 export const useDialogueStore = create<DialogueState>()((set, get) => {
-  const alive = (hostId: string, epoch: number) => (get().epoch[hostId] ?? 0) === epoch
+  // A request still out is the current one only while its host kept the same connection: `setSupport(false)` and `forgetHost` move the epoch.
+  const alive = (hostId: string, epoch: number) => (get().epoch[hostId] ?? 0) === epoch && get().support[hostId] === true
 
   async function loadSummaries(hostId: string, sessionId: string, range: TurnRange): Promise<TurnSummary[]> {
     if (!get().support[hostId]) return []
@@ -106,7 +107,16 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
   return {
     support: {}, byHost: {}, epoch: {},
 
-    setSupport: (hostId, supported) => set((s) => (s.support[hostId] === supported ? s : { support: { ...s.support, [hostId]: supported } })),
+    // Support going away (disconnect, probe start, probe failed, capability gone) ends the connection the requests out were made on: the epoch moves
+    // so their answers are dropped, and nothing waits on a job queued over it (a later read shows what it made).
+    setSupport: (hostId, supported) => set((s) => {
+      if (supported) return s.support[hostId] === true ? s : { support: { ...s.support, [hostId]: true } }
+      const host = s.byHost[hostId]
+      const byHost = host
+        ? { ...s.byHost, [hostId]: Object.fromEntries(Object.entries(host).map(([sid, e]) => [sid, e.generating || e.loading ? { ...e, generating: false, loading: false } : e])) }
+        : s.byHost
+      return { support: { ...s.support, [hostId]: false }, byHost, epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 } }
+    }),
 
     loadRecaps,
     loadTurnSummaries: (hostId, sessionId, range) => loadSummaries(hostId, sessionId, range),
