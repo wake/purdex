@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.780] - 2026-11-02
+
+> **個人面板拿掉未分組的提示。** 只有 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。daemon、mod、wwd 都沒改：不用部署 daemon、不用跑 `pdx setup`、不重裝 wwd。依賴沒變，不用 `pnpm install`。
+
+### Changed
+
+- **個人面板拿掉未分組的提示（#3984）**：未分組的 session，設定區只剩「任務編組」那一列，不再顯示「這個 session 還沒有編組。選一個任務編組，或新增一個。」。
+
 ## [1.0.0-alpha.779] - 2026-11-02
 
 > **面板裡的淡字調亮。** 只有 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。daemon、mod、wwd 都沒改：不用部署 daemon、不用跑 `pdx setup`、不重裝 wwd。依賴沒變，不用 `pnpm install`。
