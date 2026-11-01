@@ -128,6 +128,23 @@ func TestModuleRecordsTurnEndsThenStopsWriting(t *testing.T) {
 	}
 }
 
+func TestModuleStartWithoutTurnEndSourceIsNotReady(t *testing.T) {
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}})
+	fr := &fakeReader{calls: map[string]int{}, froms: map[string][]string{}}
+	c.Registry.Register(convturns.Key, fullReader{fr})
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Stop(context.Background()); m.Close() })
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := m.Status(); st["ready"] != false || st["start_error"] == "" || st["start_error"] == nil {
+		t.Fatalf("status = %v", st)
+	}
+}
+
 func TestModuleStartWithoutConversationReaderDoesNotSubscribe(t *testing.T) {
 	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}})
 	sub := &fakeSub{}
@@ -142,5 +159,8 @@ func TestModuleStartWithoutConversationReaderDoesNotSubscribe(t *testing.T) {
 	}
 	if sub.fn != nil {
 		t.Fatal("subscribed without a reader to read the turns")
+	}
+	if st := m.Status(); st["ready"] != false || st["start_error"] == "" || st["start_error"] == nil {
+		t.Fatalf("status = %v", st)
 	}
 }

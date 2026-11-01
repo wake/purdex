@@ -33,6 +33,8 @@ type Module struct {
 	closing *Store // the store Stop set aside for Close (guarded by mu)
 	ready   bool
 	initErr string
+	// startErr says why Start did not begin recording (a service it needs is missing); ready is false then.
+	startErr string
 
 	intake       *intake
 	unsubTurnEnd func()
@@ -70,7 +72,16 @@ func (m *Module) RegisterRoutes(*http.ServeMux) {}
 func (m *Module) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready, "init_error": m.initErr}
+	return map[string]any{"ready": m.ready, "init_error": m.initErr, "start_error": m.startErr}
+}
+
+// notReady records why Start has nothing to do: Status then reports ready=false with start_error set.
+func (m *Module) notReady(why string) error {
+	log.Printf("[dialogue] %s", why)
+	m.mu.Lock()
+	m.ready, m.startErr = false, why
+	m.mu.Unlock()
+	return nil
 }
 
 // Start builds the writer and the intake from whatever the registry offers and subscribes to the turn ends. Without the
@@ -98,12 +109,10 @@ func (m *Module) Start(context.Context) error {
 		}
 	}
 	if turns == nil {
-		log.Printf("[dialogue] no conversation reader registered; turn ends are not recorded")
-		return nil
+		return m.notReady("no conversation reader registered; turn ends are not recorded")
 	}
 	if sub == nil {
-		log.Printf("[dialogue] no turn-end source registered; turn ends are not recorded")
-		return nil
+		return m.notReady("no turn-end source registered; turn ends are not recorded")
 	}
 	m.core.CfgMu.RLock()
 	dataDir := m.core.Cfg.DataDir

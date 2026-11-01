@@ -41,6 +41,8 @@ type intakeDeps struct {
 	onWritten func(ev agentmod.TurnEndEvent, res convturns.TurnsFromResult, wr WriteResult, targetID, hookText string)
 	// onSettled runs once for every event, however it ended (written, nothing to write, an error, dropped, abandoned
 	// by Stop). PR 2 tells the push hold "this session was looked at" there.
+	// It may be called on the turn-end hub's subscriber goroutine (when the queue is full), so it MUST be quick and must
+	// never block (PR 2 hands it an in-memory record of the push wait).
 	onSettled func(sid string, at int64)
 	timing    timing
 }
@@ -56,6 +58,8 @@ type intake struct {
 	queues  map[string]*sessionQueue
 	wg      sync.WaitGroup
 	stopCh  chan struct{}
+	ctx     context.Context // parent of every read; cancelled by Stop
+	cancel  context.CancelFunc
 }
 
 type sessionQueue struct {
@@ -64,7 +68,8 @@ type sessionQueue struct {
 }
 
 func newIntake(d intakeDeps) *intake {
-	return &intake{d: d, queues: map[string]*sessionQueue{}, stopCh: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &intake{d: d, queues: map[string]*sessionQueue{}, stopCh: make(chan struct{}), ctx: ctx, cancel: cancel}
 }
 
 func (in *intake) log(format string, args ...any) {
@@ -127,6 +132,7 @@ func (in *intake) Stop() {
 	if !in.stopped {
 		in.stopped = true
 		close(in.stopCh)
+		in.cancel()
 	}
 	in.mu.Unlock()
 	in.wg.Wait()
@@ -202,23 +208,29 @@ func (in *intake) work(sid string, q *sessionQueue) {
 func (in *intake) handle(ev agentmod.TurnEndEvent) {
 	defer in.settled(ev.SessionID, ev.At)
 	sid := ev.SessionID
-	cursor := ""
-	if st, has, err := in.d.store.Session(sid); err != nil {
-		in.log("[dialogue] read the cursor of session %s: %v", sid, err)
-		return
-	} else if has {
-		cursor = st.CursorTurn
+	// every read starts from the cursor as it is now: an earlier part of this event may have moved it
+	readFromCursor := func() (convturns.TurnsFromResult, bool) {
+		cursor := ""
+		if st, has, err := in.d.store.Session(sid); err != nil {
+			in.log("[dialogue] read the cursor of session %s: %v", sid, err)
+			return convturns.TurnsFromResult{}, false
+		} else if has {
+			cursor = st.CursorTurn
+		}
+		return in.read(sid, cursor)
 	}
-	res, ok := in.read(sid, cursor)
+	res, ok := readFromCursor()
 	if !ok {
 		return
 	}
-	tries := 0 // waits for the transcript and for running tools share one allowance
+	var acc WriteResult // what every Write of this event did, handed to onWritten
+	// The waits for the transcript and for running tools share one allowance of settleRetries (plan §1-7, §1-8: deliberate).
+	tries := 0
 	force := false
 	reread := false
 	for {
 		if reread {
-			if res, ok = in.read(sid, cursor); !ok {
+			if res, ok = readFromCursor(); !ok {
 				return
 			}
 		}
@@ -261,6 +273,10 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 			in.log("[dialogue] write session %s: %v", sid, err)
 			return
 		}
+		acc.Turns = append(acc.Turns, wr.Turns...)
+		acc.First = acc.First || wr.First
+		acc.Rebuilt = acc.Rebuilt || wr.Rebuilt
+		acc.WaitingTool = wr.WaitingTool
 		if wr.WaitingTool && !force {
 			if tries < settleRetries {
 				tries++
@@ -274,7 +290,7 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 			continue
 		}
 		if in.d.onWritten != nil {
-			in.d.onWritten(ev, res, wr, targetID, ev.Text)
+			in.d.onWritten(ev, res, acc, targetID, ev.Text)
 		}
 		return
 	}
@@ -284,12 +300,14 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 // reason is logged).
 func (in *intake) read(sid, from string) (convturns.TurnsFromResult, bool) {
 	for busy := 0; ; busy++ {
-		ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+		ctx, cancel := context.WithTimeout(in.ctx, readTimeout) // in.ctx ends with Stop
 		res, err := in.d.turns.TurnsFrom(ctx, "claude", sid, from)
 		cancel()
 		switch {
 		case err == nil:
 			return res, true
+		case in.isStopped():
+			return convturns.TurnsFromResult{}, false
 		case errors.Is(err, convfeed.ErrBusy) && busy < busyRetries:
 			if !in.sleep(in.d.timing.busyDelay) {
 				return convturns.TurnsFromResult{}, false
@@ -302,31 +320,49 @@ func (in *intake) read(sid, from string) (convturns.TurnsFromResult, bool) {
 }
 
 // findTarget says which turn a Stop event is about (its index in turns, -1 for none) and whether the transcript has
-// caught up with the Stop. It follows the workbook's adoptEvent but never changes a turn: the hook's text is not put
-// into the transcript (plan §1-8). turns[0] may be the cursor turn, which late items can still join.
+// caught up with the Stop. It follows the workbook's adoptEvent with two differences: it never changes a turn (the hook's
+// text is not put into the transcript, plan §1-8), and the cursor turn (turns[0] when cursorFound; its late items can still
+// join it) is a target only for a resend of the Stop it was written for, never otherwise. adoptEvent compares only from the
+// cursor on (i >= from) and so does this, apart from that resend case.
 //
-// The hook's text names the turn: the newest turn whose last words and the hook's text are a prefix of one another.
-// With no text (a failed turn, a tool-only one) it is the newest turn, if that has ended or is running, has done something
-// and began before the Stop. When nothing matches and the newest turn is running with no words at all, the file has not
-// caught up (false).
+// The hook's text names the turn: the newest candidate whose last words and the hook's text are a prefix of one another.
+// With no text (a failed turn, a tool-only one) it is the newest candidate that has ended, or is running and has done
+// something, and began before the Stop. When nothing matches and the newest turn is running with no words at all, the file
+// has not caught up (false).
 func findTarget(turns []convmodel.Turn, cursorFound bool, ev agentmod.TurnEndEvent) (target int, caughtUp bool) {
 	last := len(turns) - 1
 	if last < 0 {
 		return -1, true
 	}
 	want := strings.TrimSpace(ev.Text)
-	if want == "" {
-		t := turns[last]
-		if t.Outcome != convmodel.OutcomeRunning {
-			return last, true
-		}
-		// a running turn that began after this Stop is a newer turn's
-		if summarisable(t) && !(ev.At > 0 && t.StartedAt >= ev.At) {
-			return last, true
+	// from is the first candidate: the cursor turn (turns[0] when found) was written already and is never matched here,
+	// except for a Stop sent again (below).
+	from := 0
+	if cursorFound {
+		from = 1
+	}
+	newer := len(turns) - from // turns newer than the cursor; 0 when only the cursor turn is in hand
+	if newer == 0 {
+		// A resend of the Stop the cursor turn was written for: same words as its last ones.
+		if said := lastWords(turns[0]); want != "" && said != "" && (strings.HasPrefix(said, want) || strings.HasPrefix(want, said)) {
+			return 0, true
 		}
 		return -1, true
 	}
-	for i := last; i >= 0; i-- {
+	if want == "" {
+		// newest first: a turn that ended, or is running and has done something, and began before the Stop
+		for i := last; i >= from; i-- {
+			t := turns[i]
+			if t.Outcome == convmodel.OutcomeRunning && !summarisable(t) {
+				continue
+			}
+			if ev.At <= 0 || t.StartedAt < ev.At {
+				return i, true
+			}
+		}
+		return -1, true
+	}
+	for i := last; i >= from; i-- {
 		if said := lastWords(turns[i]); said != "" && (strings.HasPrefix(said, want) || strings.HasPrefix(want, said)) {
 			return i, true
 		}
@@ -338,12 +374,8 @@ func findTarget(turns []convmodel.Turn, cursorFound bool, ev agentmod.TurnEndEve
 	if ev.At > 0 && t.StartedAt >= ev.At {
 		return -1, true // it began after this Stop: a newer turn's, left running (its own Stop will come)
 	}
-	// With several turns newer than the cursor (turns[0] is the cursor turn when found) a running newest one with no known
-	// start time cannot be told from a later prompt's, a background turn or a lagging transcript: left alone.
-	newer := len(turns)
-	if cursorFound {
-		newer--
-	}
+	// With several turns newer than the cursor a running newest one with no known start time cannot be told from a later
+	// prompt's, a background turn or a lagging transcript: left alone.
 	if newer > 1 && (lastWords(t) != "" || t.StartedAt <= 0 || ev.At <= 0) {
 		return -1, true
 	}
