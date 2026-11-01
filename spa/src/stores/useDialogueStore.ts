@@ -5,8 +5,8 @@
 //   * A host that does not list `dialogue.v1` (`setSupport`, filled by unattended-support.ts's /api/info probe) gets no
 //     request from any loader; nothing is cached for it.
 //   * `regenerate` → `queued` marks the session "generating" until a recap newer than the newest one cached at request time
-//     is loaded, or a `dialogue.recap` event arrives (`applyRecapEvent` clears the mark and re-reads the recaps, but only
-//     for a session the store already holds).
+//     is loaded. A `dialogue.recap` event (only for a session the store already holds) keeps/sets the mark until the re-read shows the recap it
+//     announced; the re-read is retried a few times, and giving up clears the mark and sets `loadFailed`.
 //   * A request that lands after its host was forgotten, or after support went away (disconnect, probe), is dropped (`epoch`).
 import { create } from 'zustand'
 import { fetchRecaps, fetchTurnSummaries, requestRecap } from '../lib/dialogue/api'
@@ -24,6 +24,8 @@ export interface DialogueEntry {
   generatingBase: number
   /** The request number of the recaps answer whose counts (`can_generate`, `newest_turn_no`, `last_recap_to_no`) are cached. */
   recapsSeq: number
+  /** The last recap read failed (a `dialogue.recap` event's re-read gave up); cleared by the next good read. */
+  loadFailed: boolean
 }
 
 export type RegenerateOutcome = RecapState | 'unsupported' | 'error'
@@ -51,7 +53,7 @@ interface DialogueState {
   reset: () => void
 }
 
-const emptyEntry = (): DialogueEntry => ({ recaps: null, loading: false, summaries: {}, generating: false, generatingBase: 0, recapsSeq: 0 })
+const emptyEntry = (): DialogueEntry => ({ recaps: null, loading: false, summaries: {}, generating: false, generatingBase: 0, recapsSeq: 0, loadFailed: false })
 
 export const selectDialogueSupport = (hostId: string, state: Pick<DialogueState, 'support'> = useDialogueStore.getState()): boolean =>
   state.support[hostId] === true
@@ -78,6 +80,8 @@ function mergeRecaps(old: readonly Recap[], fresh: readonly Recap[]): Recap[] {
   return [...byId.values()].sort((a, b) => b.id - a.id)
 }
 
+const RETRY_DELAYS_MS = [1000, 2000, 4000]
+
 /** Per (host, session), the number of the last recaps GET sent: answers are ordered by when they were sent, not by when they landed. */
 const recapsIssued = new Map<string, number>()
 
@@ -99,8 +103,9 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
     return page
   }
 
-  async function loadRecaps(hostId: string, sessionId: string, limit?: number): Promise<void> {
-    if (!get().support[hostId]) return
+  /** 'ok': landed; 'failed': the request failed; 'dropped': no support, or its connection went away. */
+  async function readRecaps(hostId: string, sessionId: string, limit?: number): Promise<'ok' | 'failed' | 'dropped'> {
+    if (!get().support[hostId]) return 'dropped'
     const epoch = get().epoch[hostId] ?? 0
     const key = `${hostId}\u0000${sessionId}`
     const seq = (recapsIssued.get(key) ?? 0) + 1
@@ -110,17 +115,40 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
     try {
       answer = await fetchRecaps(hostId, sessionId, limit)
     } catch {
-      if (alive(hostId, epoch)) set((s) => withEntry(s, hostId, sessionId, (e) => ({ ...e, loading: false })))
-      return
+      if (!alive(hostId, epoch)) return 'dropped'
+      set((s) => withEntry(s, hostId, sessionId, (e) => ({ ...e, loading: false })))
+      return 'failed'
     }
-    if (!alive(hostId, epoch)) return
+    if (!alive(hostId, epoch)) return 'dropped'
     set((s) => withEntry(s, hostId, sessionId, (e) => {
       const rows = mergeRecaps(e.recaps?.recaps ?? [], answer.recaps)
       // The counts belong to the request sent last; an older one answered late only adds its rows.
       const latest = seq >= e.recapsSeq
       const next: RecapsResponse = latest ? { ...answer, recaps: rows } : { ...(e.recaps as RecapsResponse), recaps: rows }
-      return { ...e, recaps: next, recapsSeq: latest ? seq : e.recapsSeq, loading: false, generating: e.generating && !((rows[0]?.id ?? 0) > e.generatingBase) }
+      return { ...e, recaps: next, recapsSeq: latest ? seq : e.recapsSeq, loading: false, loadFailed: false, generating: e.generating && !((rows[0]?.id ?? 0) > e.generatingBase) }
     }))
+    return 'ok'
+  }
+
+  async function loadRecaps(hostId: string, sessionId: string, limit?: number): Promise<void> {
+    await readRecaps(hostId, sessionId, limit)
+  }
+
+  /** A `dialogue.recap` event's re-read: retried (1s, 2s, 4s) while it fails or still shows nothing as new as the announced recap. */
+  async function rereadAnnounced(hostId: string, sessionId: string): Promise<void> {
+    const epoch = get().epoch[hostId] ?? 0
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await readRecaps(hostId, sessionId)
+      if (outcome === 'dropped' || !alive(hostId, epoch)) return
+      const e = selectDialogueEntry(get(), hostId, sessionId)
+      if (outcome === 'ok' && !e?.generating) return
+      if (attempt >= RETRY_DELAYS_MS.length) {
+        set((s) => withEntry(s, hostId, sessionId, (x) => ({ ...x, generating: false, loadFailed: outcome === 'failed' })))
+        return
+      }
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]))
+      if (!alive(hostId, epoch)) return
+    }
   }
 
   return {
@@ -160,15 +188,22 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
     applyRecapEvent: (hostId, value) => {
       if (!get().support[hostId]) return
       let sessionId: unknown
+      let recapId: unknown
       try {
         const v: unknown = JSON.parse(value)
-        sessionId = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>).session_id : undefined
+        const o = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+        sessionId = o.session_id
+        recapId = o.recap_id
       } catch {
         return
       }
       if (typeof sessionId !== 'string' || sessionId === '' || !get().byHost[hostId]?.[sessionId]) return
-      set((s) => withEntry(s, hostId, sessionId as string, (e) => ({ ...e, generating: false })))
-      void loadRecaps(hostId, sessionId)
+      // Generating stays until the re-read shows the announced recap (a failed read must not hand the button back for finished work).
+      set((s) => withEntry(s, hostId, sessionId as string, (e) => {
+        const base = typeof recapId === 'number' && Number.isFinite(recapId) ? recapId - 1 : (e.recaps?.recaps[0]?.id ?? 0)
+        return { ...e, generating: true, generatingBase: e.generating ? Math.max(e.generatingBase, base) : base }
+      }))
+      void rereadAnnounced(hostId, sessionId)
     },
 
     forgetHost: (hostId) => set((s) => {

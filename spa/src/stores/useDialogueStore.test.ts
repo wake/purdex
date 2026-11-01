@@ -1,6 +1,6 @@
 // spa/src/stores/useDialogueStore.test.ts — the dialogue data layer's store (plan T14a): recaps and turn summaries cached per
 // (host, session), the "generating" mark, the host event, support gating, forgetHost.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Recap, RecapsResponse, TurnSummary } from '../lib/dialogue/types'
 
 const fetchRecaps = vi.fn<(h: string, s: string, limit?: number) => Promise<RecapsResponse>>()
@@ -160,17 +160,18 @@ describe('regenerate', () => {
 describe('applyRecapEvent', () => {
   const ev = (sid: string) => JSON.stringify({ session_id: sid, recap_id: 7 })
 
-  it('refetches recaps of a session the store holds and clears generating', async () => {
+  it('refetches recaps of a session the store holds; generating stays until the recap it announced is read', async () => {
     fetchRecaps.mockResolvedValueOnce(resp([recap(4)]))
     await st().loadRecaps('h1', 'S1')
     requestRecap.mockResolvedValueOnce('queued')
     await st().regenerate('h1', 'S1', 'manual')
     fetchRecaps.mockResolvedValueOnce(resp([recap(7), recap(4)]))
     st().applyRecapEvent('h1', ev('S1'))
-    expect(entry()?.generating).toBe(false) // cleared at once, not after the fetch
+    expect(entry()?.generating).toBe(true) // not cleared before the read lands
     await flush()
     expect(fetchRecaps).toHaveBeenCalledTimes(2)
     expect(entry()?.recaps?.recaps[0].id).toBe(7)
+    expect(entry()?.generating).toBe(false)
   })
 
   it('does nothing for a session with no cache', async () => {
@@ -292,5 +293,65 @@ describe('loadRecaps out-of-order answers', () => {
     await pa
     expect(entry()?.recaps?.recaps.map((x) => x.id)).toEqual([5, 4, 3])
     expect(entry()?.recaps?.newest_turn_no).toBe(30)
+  })
+})
+
+describe('applyRecapEvent retries (fake timers)', () => {
+  const ev = JSON.stringify({ session_id: 'S1', recap_id: 7 })
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  const seed = async () => {
+    fetchRecaps.mockResolvedValueOnce(resp([recap(4)]))
+    await st().loadRecaps('h1', 'S1')
+    requestRecap.mockResolvedValueOnce('queued')
+    await st().regenerate('h1', 'S1', 'manual')
+  }
+
+  it('a failed re-read keeps generating, retries, and clears it once the announced recap is read', async () => {
+    await seed()
+    fetchRecaps.mockRejectedValueOnce(new Error('x')).mockResolvedValueOnce(resp([recap(7), recap(4)]))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(entry()?.generating).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(entry()?.recaps?.recaps[0].id).toBe(7)
+    expect(entry()?.generating).toBe(false)
+    expect(entry()?.loadFailed).toBe(false)
+  })
+
+  it('every attempt failing clears generating and flags the read as failed; the next good read clears the flag', async () => {
+    await seed()
+    fetchRecaps.mockRejectedValue(new Error('x'))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 4000)
+    expect(fetchRecaps).toHaveBeenCalledTimes(1 + 4)
+    expect(entry()?.generating).toBe(false)
+    expect(entry()?.loadFailed).toBe(true)
+    fetchRecaps.mockReset()
+    fetchRecaps.mockResolvedValueOnce(resp([recap(7), recap(4)]))
+    await st().loadRecaps('h1', 'S1')
+    expect(entry()?.loadFailed).toBe(false)
+  })
+
+  it('a re-read whose newest recap is older than the announced one stays generating', async () => {
+    await seed()
+    fetchRecaps.mockResolvedValueOnce(resp([recap(5), recap(4)])).mockResolvedValueOnce(resp([recap(7), recap(5), recap(4)]))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(entry()?.recaps?.recaps[0].id).toBe(5)
+    expect(entry()?.generating).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(entry()?.generating).toBe(false)
+  })
+
+  it('a retry stops when the connection went away', async () => {
+    await seed()
+    fetchRecaps.mockRejectedValue(new Error('x'))
+    st().applyRecapEvent('h1', ev)
+    await vi.advanceTimersByTimeAsync(0)
+    st().setSupport('h1', false)
+    st().setSupport('h1', true)
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(fetchRecaps).toHaveBeenCalledTimes(2)
   })
 })
