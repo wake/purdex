@@ -135,7 +135,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   5. 每寫完一回合就 Commit（游標、位元組數、新回合的編號）。
 - 檔頭：第一段 `<prev:>` 依 §1-10；`<source:>` 用 `TurnsFromResult.Path`。
 - 寫檔：`O_APPEND`；資料夾 0700、檔案 0600（內容是對話原文）。
-- 給 PR 2 的接點：`Hooks{Carried func(sid) string; Placed func(sid, turnID) []string}`，PR 1 都回空。
+- 給 PR 2 的接點：`Hooks{Carried func(sid string, beforeNo int) string; Placed func(sid, turnID string) []string}`，PR 1 都回空。`beforeNo` 是發生壓縮分界的那個回合的編號，`Carried` 回傳 `to_no` 不大於它的最新一則 recap（T4 審查後改，重建時才帶得對）。intake 另有 `onWritten`、`onSettled` 兩個接點給 T9（見 T5）。
 - 測試清單：
   1. 第一次寫（含 compact fixture → 兩段、各有 prev／next）；
   2. 同一事件重複送不重寫；
