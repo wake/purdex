@@ -32,6 +32,8 @@ import { handlePersonasEvent, PERSONAS_EVENT_TYPE } from '../lib/names/persona-l
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { handleRelayFreshEvent } from '../lib/relay/fresh-ws'
 import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
+import { DIALOGUE_RECAP_EVENT_TYPE } from '../lib/dialogue/types'
+import { useDialogueStore } from '../stores/useDialogueStore'
 import { jobsDriver, startJobsCatchUp } from '../lib/pool/jobs-driver-live'
 import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
 import { handlePoolEvent, isPoolEvent } from '../lib/pool/pool-events'
@@ -334,6 +336,13 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleRelayFreshEvent(hostId, event.value)
+            return
+          }
+          if (event.type === DIALOGUE_RECAP_EVENT_TYPE) {
+            // A recap was written (dialogue plan T10): the store re-reads that session's recaps when it holds it. Bound to the connection like the frames above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            useDialogueStore.getState().applyRecapEvent(hostId, event.value)
             return
           }
           if (isJobsEvent(event.type)) {
