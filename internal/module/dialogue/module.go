@@ -18,6 +18,7 @@ import (
 	"github.com/wake/purdex/internal/modevents"
 	agentmod "github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/workbooklines"
 )
 
 // turnEndSubscriber is the part of the agent module's TerminalSessions the module needs.
@@ -42,8 +43,11 @@ type Module struct {
 
 	// The job channel (queue.go): created by Start, read by the "workbook.jobs" service. kinds is what T9/T10 fill in
 	// before Start: one handler per job kind.
-	jobs       *channel
-	kinds      map[string]kindHandler
+	jobs  *channel
+	lines *PushLines             // the push wait (registered at Init)
+	kinds map[string]kindHandler // extra kinds a test or T10 adds; Start adds the turn-summary kind
+	recap func(sid string)       // called when enough summaries are done since a recap; T10 sets it
+
 	stopReaper context.CancelFunc
 	reaperDone chan struct{}
 }
@@ -73,6 +77,13 @@ func (m *Module) Init(c *core.Core) error {
 	// The mod's routes find the channel by this name (jobs.go); the service says not ready until Start builds the channel.
 	if c.Registry != nil {
 		c.Registry.Register(jobsKey, jobsService{m: m})
+		// The push module's hold waits here for the summary of a Stop; the lines answer false once the store is gone.
+		m.lines = StorePushLines(func() *Store {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.store
+		})
+		c.Registry.Register(workbooklines.Key, m.lines)
 	}
 	return nil
 }
@@ -141,8 +152,27 @@ func (m *Module) Start(context.Context) error {
 			return prev, ok
 		}
 	}
-	w := NewWriter(filepath.Join(dataDir, "dialogue"), st, prevOf, Hooks{}, WithLogf(logf))
-	in := newIntake(intakeDeps{turns: turns, writer: w, store: st, logf: logf, timing: defaultTiming})
+	hooks := Hooks{Placed: func(sid, turnID string) []string { return placedBlocks(st, sid, turnID) }}
+	w := NewWriter(filepath.Join(dataDir, "dialogue"), st, prevOf, hooks, WithLogf(logf))
+	// What the last run left pending has no job any more: end it, or the push would wait for it until its timeout.
+	if n, err := st.FailPendingSummaries(); err != nil {
+		logf("[dialogue] end the summaries left pending: %v", err)
+	} else if n > 0 {
+		logf("[dialogue] %d turn summaries were left pending by the last run: failed (stopped)", n)
+	}
+	var root team.LineageRootResolver
+	if reg != nil {
+		if svc, ok := reg.Get(team.LineageRootKey); ok {
+			root, _ = svc.(team.LineageRootResolver)
+		}
+	}
+	lines := m.lines
+	if lines == nil {
+		lines = StorePushLines(func() *Store { return st })
+	}
+	sumIn := &summaryIntake{st: st, lines: lines, root: root, logf: logf}
+	in := newIntake(intakeDeps{turns: turns, writer: w, store: st, logf: logf, timing: defaultTiming,
+		onWritten: sumIn.onWritten, onSettled: sumIn.onSettled})
 	// The channel is built before the subscription, so the first turn end can already queue a job.
 	var capable func(sid string) bool
 	if reg != nil {
@@ -155,9 +185,15 @@ func (m *Module) Start(context.Context) error {
 		}
 	}
 	m.mu.Lock()
-	kinds := m.kinds
+	kinds := map[string]kindHandler{}
+	for k, h := range m.kinds {
+		kinds[k] = h
+	}
+	recap := m.recap
 	m.mu.Unlock()
+	kinds[kindTurnSummary] = &summaryKind{st: st, w: w, lines: lines, recap: recap, logf: logf}
 	ch := newChannel(chanDeps{capable: capable, handlers: kinds, logf: logf})
+	sumIn.jobs = ch
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); ch.runReaper(ctx) }()
