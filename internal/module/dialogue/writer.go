@@ -64,6 +64,40 @@ type Writer struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// placed: per session, the first lines of the blocks the current rebuild put into the file through Placed (memory only;
+	// the race it closes lives inside one process). AppendMarker skips a block whose first line is in it.
+	placed map[string]map[string]bool
+}
+
+func (w *Writer) resetPlaced(sid string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.placed, sid)
+}
+
+func (w *Writer) notePlaced(sid, block string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.placed == nil {
+		w.placed = map[string]map[string]bool{}
+	}
+	if w.placed[sid] == nil {
+		w.placed[sid] = map[string]bool{}
+	}
+	w.placed[sid][blockHead(block)] = true
+}
+
+func (w *Writer) wasPlaced(sid, block string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.placed[sid][blockHead(block)]
+}
+
+func blockHead(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // Option configures a Writer.
@@ -199,6 +233,10 @@ func (w *Writer) AppendMarker(sid string, turnNo int, text string) error {
 	l.Lock()
 	defer l.Unlock()
 
+	if w.wasPlaced(sid, text) {
+		w.log("[dialogue] session %s: a rebuild already put %q into the file: a marker is not appended", sid, blockHead(text))
+		return nil
+	}
 	st, has, err := w.store.Session(sid)
 	if err != nil {
 		return err
@@ -299,6 +337,7 @@ func (w *Writer) needsRebuild(sid string, st SessionState, res convturns.TurnsFr
 
 func (w *Writer) rebuild(sid string, old SessionState, res convturns.TurnsFromResult, target string, force bool) (WriteResult, error) {
 	// Reset first (this sets the flag, so a crash from here on is still a rebuild), then the files, then the rewrite.
+	w.resetPlaced(sid)
 	if err := w.store.ResetForRebuild(sid); err != nil {
 		return WriteResult{}, err
 	}
@@ -534,6 +573,7 @@ func (r *runner) writeTurn(t convmodel.Turn, items []convmodel.Item) (WrittenTur
 			if err := r.text(s); err != nil {
 				return WrittenTurn{}, false, err
 			}
+			r.w.notePlaced(r.sid, s)
 		}
 	}
 	ended := t.StartedAt

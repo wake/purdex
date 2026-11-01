@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // Page sizes of the read routes.
@@ -201,7 +202,13 @@ func (m *Module) handleRequestRecap(w http.ResponseWriter, r *http.Request) {
 		Trigger string `json:"trigger"`
 	}
 	raw, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
-	if err := json.Unmarshal(raw, &body); err != nil || (body.Trigger != "open" && body.Trigger != "manual") {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		body.Trigger = "manual" // no body: a plain request
+	} else if err := json.Unmarshal(raw, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_trigger")
+		return
+	}
+	if body.Trigger != "open" && body.Trigger != "manual" {
 		writeError(w, http.StatusBadRequest, "bad_trigger")
 		return
 	}

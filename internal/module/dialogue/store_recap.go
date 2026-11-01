@@ -61,7 +61,7 @@ func (s *Store) oneRecap(query string, args ...any) (RecapRow, bool, error) {
 	return x, true, nil
 }
 
-// InsertRecap stores a recap in ONE transaction: the row (INSERT OR IGNORE on job_id) and the session's since_recap = 0.
+// InsertRecap stores a recap in ONE transaction: the row (INSERT OR IGNORE on job_id) and the session's since_recap, reset to the done summaries past the recap's to_no.
 // A job that already has its recap changes nothing and applied is false. The row's At and CreatedAt are set here.
 func (s *Store) InsertRecap(r RecapRow) (id int64, applied bool, err error) {
 	s.wmu.Lock()
@@ -83,7 +83,11 @@ func (s *Store) InsertRecap(r RecapRow) (id int64, applied bool, err error) {
 		return 0, false, nil
 	}
 	id, _ = res.LastInsertId()
-	if _, err := tx.Exec(`UPDATE dlg_sessions SET since_recap = 0 WHERE session_id = ?`, r.SessionID); err != nil {
+	// The count restarts from the summaries this recap does not cover: those done (SetSummaryDone counts only state
+	// 'done') for turns after its to_no, finished while it was being written.
+	if _, err := tx.Exec(`UPDATE dlg_sessions SET since_recap =
+		(SELECT COUNT(*) FROM dlg_summaries WHERE session_id = ? AND state = 'done' AND turn_no > ?)
+		WHERE session_id = ?`, r.SessionID, r.ToNo, r.SessionID); err != nil {
 		return 0, false, fmt.Errorf("store recap: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

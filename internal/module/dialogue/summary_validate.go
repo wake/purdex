@@ -85,7 +85,7 @@ func repairSummaryText(s string) string {
 			return strings.TrimSpace(string(r[:i+1]))
 		}
 	}
-	return cutAtWord(s, maxSummary) + "…"
+	return cutAtWord(s, maxSummary-1) + "…" // the ellipsis counts: the result stays within maxSummary
 }
 
 // isWordRune: the characters of a run that must not be cut in the middle (a word, a path, a version, a PR number).

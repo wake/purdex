@@ -248,7 +248,7 @@ func TestAPIBadSessionAndUnavailable(t *testing.T) {
 func TestAPIPostRecapTriggerAndStates(t *testing.T) {
 	a := newAPIEnv(t)
 	p := "/api/dialogue/" + sidS + "/recap"
-	for _, body := range []string{``, `{}`, `{"trigger":"every30"}`, `{"trigger":"x"}`, `not json`} {
+	for _, body := range []string{`{}`, `{"trigger":"every30"}`, `{"trigger":"x"}`, `not json`} {
 		code, out := a.do("POST", p, body)
 		if code != 400 || out["error"] != "bad_trigger" {
 			t.Fatalf("body %q: %d %v", body, code, out)

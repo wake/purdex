@@ -103,7 +103,7 @@ func TestRepairSummary_Table(t *testing.T) {
 		{"summary cut at the last sentence end within 150", summaryOut{Title: "t", Summary: "第一句。" + strings.Repeat("字", 146) + "。" + long},
 			summaryOut{Title: "t", Summary: "第一句。"}},
 		{"summary sentence end exactly at 150", summaryOut{Title: "t", Summary: strings.Repeat("字", 149) + "。" + long}, summaryOut{Title: "t", Summary: strings.Repeat("字", 149) + "。"}},
-		{"summary with no sentence end gets an ellipsis", summaryOut{Title: "t", Summary: long}, summaryOut{Title: "t", Summary: strings.Repeat("字", 150) + "…"}},
+		{"summary with no sentence end gets an ellipsis", summaryOut{Title: "t", Summary: long}, summaryOut{Title: "t", Summary: strings.Repeat("字", 149) + "…"}},
 		{"summary with no sentence end cut at a word", summaryOut{Title: "t", Summary: strings.Repeat("字", 140) + " internal/module/dialogue/queue.go"},
 			summaryOut{Title: "t", Summary: strings.Repeat("字", 140) + "…"}},
 		{"skip keeps its flag", summaryOut{Skip: true}, summaryOut{Skip: true}},
