@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.777] - 2026-11-02
+
+> **對話檔、回合摘要與 recap 取代 session 工作簿與團隊日誌。** daemon 與 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。mod 沒改，**部署不用跑 `pdx setup`**；wwd 沒改，這版不重裝 wwd。依賴沒變，不用 `pnpm install`。
+>
+> 舊資料不動：`workbook.db` 與 `<data_dir>/journal/` 留在原處，新資料寫進 `<data_dir>/dialogue.db` 與 `<data_dir>/dialogue/`。host config 的 `[journal]` 段落不再讀取，留著也不會出錯。新舊混用時：舊 App 接新 daemon，看不到 `workbook.v1`／`journal.*`，會自己藏起工作簿與日誌；新 App 接舊 daemon，看不到 `dialogue.v1`，不顯示 recap 入口。mod 的派工通道照舊（`/mod/v1/workbook/next|result`、kind `turn`），`/workbook refresh` 改回 409 disabled，這個指令等下一個 change 改 mod 時拿掉。spec：`docs/specs/2026-11-01-session-dialogue-log-spec.md`。
+
+### Added
+
+- **對話檔（#3972）**：每個 Claude Code session 每結束一回合，就把這一回合接到 `<data_dir>/dialogue/<session_id>/NNN.md`。使用者與 agent 的原話全文保留，工具只留一行摘要。每次壓縮換下一段，前後段互指；接力的新 session 第一段指向前任最後一段。第一次記錄一個 session 時從 transcript 開頭補寫；游標記在 `dialogue.db`，當機殘留會截回，對不上就整個重建。
+- **回合摘要與 recap（#3974）**：
+  - 每回合一則回合摘要（標題、推播、摘要），推播沿用 `workbook.push-lines` 與 `push_wait_s`；
+  - recap 讀最近 30 則回合摘要，在每 30 則、App 打開歷史、手動時產生，內容分完成／目前／已定／等你／下一步；
+  - 兩者都寫進對話檔，換段時把最新的 recap 帶進新段；
+  - 新 API：`GET /api/dialogue/{session_id}/recaps`、`GET …/turn-summaries`、`POST …/recap`，host 事件 `dialogue.recap`，capability `dialogue.v1`（裝置 token 可用）。
+- **App 的 recap 檢視（#3976）**：
+  - 團隊列與個人卡片的第二行顯示最新 recap 的 headline 與時間；還沒有 recap 時，顯示最新回合的編號與標題；
+  - 列尾與標題列的時鐘打開 recap 歷史：最上面是還沒寫進 recap 的回合，下面是各則 recap 和重新產生按鈕；
+  - 「已結束」群組恢復，點開看離開的 session 最後的 recap；
+  - 接力卡片改顯示交出那一方最新的 recap。
+
+### Removed
+
+- **session 工作簿與團隊日誌（#3974、#3976）**：daemon 拿掉 `internal/module/workbook`、`internal/journal`、`pdx journal`、`[journal]` 設定與 team 的 journal feed，`/api/info` 不再宣告 `workbook.v1`／`workbook.v2`／`journal.*`。App 拿掉工作簿與日誌的介面、store 與事件接線，包括日誌卡片、確認帶、任務卡、路線圖卡。
+
 ## [1.0.0-alpha.776] - 2026-10-24
 
 > **主機設定的接力區多一個「member 自動接力提醒」開關（`relay.member_auto`）。** daemon 與 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。mod 只加了測試（`register.js` 沒改），**部署不用跑 `pdx setup`**；wwd 沒改，這版不重裝 wwd。依賴沒變，不用 `pnpm install`。
