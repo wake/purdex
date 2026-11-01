@@ -27,6 +27,7 @@ import (
 	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
 	devicesmod "github.com/wake/purdex/internal/module/devices"
+	dialoguemod "github.com/wake/purdex/internal/module/dialogue"
 	fleetmod "github.com/wake/purdex/internal/module/fleet"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	gatemod "github.com/wake/purdex/internal/module/gate"
@@ -544,6 +545,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// workbook (session summaries, spec 2026-10-09-session-workbook) is always mounted: one small file, and it soft-fails
 	// like devices. It reads the agent's turn ends, the team's seats, the conversation's turns and the host settings.
 	c.AddModule(workbookmod.New())
+
+	// dialogue (what was said in every Claude Code session, as plain-text files, spec 2026-11-01-session-dialogue-log) is always
+	// mounted: one small db, and it soft-fails like the workbook. It reads the agent's turn ends and the conversation's turns.
+	c.AddModule(dialoguemod.New())
 
 	// reads (badge spec §7, read sync) is always mounted: it keeps only memory. It serves POST /api/sessions/{code}/read and the
 	// reads=v1 frames; the push module reads its feed.
