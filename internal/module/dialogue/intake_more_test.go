@@ -26,9 +26,9 @@ func TestIntakeRetryReadsFromTheMovedCursor(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("A"), basicTurn("B"), toolTurnID("C", st)}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	if got := strings.Join(h.fr.fromsOf("s"), ","); got != ",B,B" {
+	if got := strings.Join(h.fr.fromsOf(sidS), ","); got != ",B,B" {
 		t.Fatalf("read cursors = %q, want \",B,B\"", got)
 	}
 	w := h.writtenCalls()
@@ -45,7 +45,7 @@ func TestIntakeRetryReadsFromTheMovedCursor(t *testing.T) {
 	if strings.Join(ids, ",") != "A,B,C" {
 		t.Fatalf("onWritten turns = %v, want A,B,C", ids)
 	}
-	if got := h.read("s", 1); !strings.Contains(got, "ok C") {
+	if got := h.read(sidS, 1); !strings.Contains(got, "ok C") {
 		t.Fatalf("C not written:\n%s", got)
 	}
 }
@@ -67,24 +67,24 @@ func TestIntakeNeedAllThenWaitingTool(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("A"), toolTurnID("C", st)}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	if err := os.Remove(h.seg("s", 1)); err != nil {
+	if err := os.Remove(h.seg(sidS, 1)); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
 	phase = 2
 	mu.Unlock()
-	h.in.OnTurnEnd(stopEv("s", 2))
+	h.in.OnTurnEnd(stopEv(sidS, 2))
 	h.waitSettled(2)
-	if got := strings.Join(h.fr.fromsOf("s"), ","); got != ",A,,A,A" {
+	if got := strings.Join(h.fr.fromsOf(sidS), ","); got != ",A,,A,A" {
 		t.Fatalf("read cursors = %q, want \",A,,A,A\"", got)
 	}
 	w := h.writtenCalls()
 	if len(w) != 2 || !w[1].wr.Rebuilt || w[1].wr.WaitingTool {
 		t.Fatalf("written = %+v", w)
 	}
-	if got := h.read("s", 1); !strings.Contains(got, "ok C") || strings.Count(got, "question A") != 1 {
+	if got := h.read(sidS, 1); !strings.Contains(got, "ok C") || strings.Count(got, "question A") != 1 {
 		t.Fatalf("file:\n%s", got)
 	}
 }
@@ -100,10 +100,10 @@ func TestIntakeStopSettlesQueuedEvents(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("t1")}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	<-entered
 	for at := int64(2); at <= 4; at++ {
-		h.in.OnTurnEnd(stopEv("s", at))
+		h.in.OnTurnEnd(stopEv(sidS, at))
 	}
 	stopped := make(chan struct{})
 	go func() { h.in.Stop(); close(stopped) }()
@@ -141,7 +141,7 @@ func TestIntakeStopInterruptsRead(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	r := ctxReader{entered: make(chan struct{}, 1)}
 	in := newIntake(intakeDeps{turns: r, writer: e.w, store: e.store, timing: timing{busyDelay: time.Millisecond, settleDelay: time.Millisecond, idle: time.Hour}})
-	in.OnTurnEnd(stopEv("s", 1))
+	in.OnTurnEnd(stopEv(sidS, 1))
 	<-r.entered
 	stopped := make(chan struct{})
 	go func() { in.Stop(); close(stopped) }()
@@ -197,7 +197,7 @@ func TestFindTargetTable(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			ev := agentmod.TurnEndEvent{SessionID: "s", Text: r.text, At: r.at}
+			ev := agentmod.TurnEndEvent{SessionID: sidS, Text: r.text, At: r.at}
 			target, caught := findTarget(r.turns, r.found, ev)
 			if target != r.target || caught != r.caught {
 				t.Fatalf("findTarget = (%d, %v), want (%d, %v)", target, caught, r.target, r.caught)

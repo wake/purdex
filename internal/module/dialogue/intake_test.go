@@ -158,21 +158,21 @@ func TestIntakeSessionsDoNotBlockEachOther(t *testing.T) {
 	gate := make(chan struct{})
 	entered := make(chan struct{}, 1)
 	h := newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
-		if sid == "a" {
+		if sid == sidA {
 			entered <- struct{}{}
 			<-gate
 		}
 		return fromRes([]convmodel.Turn{basicTurn("t1")}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("a", 1))
+	h.in.OnTurnEnd(stopEv(sidA, 1))
 	<-entered
-	h.in.OnTurnEnd(stopEv("b", 2))
-	waitFor(t, "b written while a is stuck", func() bool { return fileExists(h.seg("b", 1)) })
-	if fileExists(h.seg("a", 1)) {
+	h.in.OnTurnEnd(stopEv(sidB, 2))
+	waitFor(t, "b written while a is stuck", func() bool { return fileExists(h.seg(sidB, 1)) })
+	if fileExists(h.seg(sidA, 1)) {
 		t.Fatal("a was written before its read returned")
 	}
 	close(gate)
-	waitFor(t, "a written", func() bool { return fileExists(h.seg("a", 1)) })
+	waitFor(t, "a written", func() bool { return fileExists(h.seg(sidA, 1)) })
 	h.waitSettled(2)
 }
 
@@ -187,20 +187,20 @@ func TestIntakeSameSessionKeepsOrder(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("t1")}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	<-entered
 	for at := int64(2); at <= 5; at++ {
-		h.in.OnTurnEnd(stopEv("s", at)) // must not block on the busy worker
+		h.in.OnTurnEnd(stopEv(sidS, at)) // must not block on the busy worker
 	}
 	close(gate)
 	h.waitSettled(5)
 	got := h.settledCalls()
 	for i, c := range got {
-		if c.sid != "s" || c.at != int64(i+1) {
+		if c.sid != sidS || c.at != int64(i+1) {
 			t.Fatalf("settled[%d] = %+v, want At %d (all: %+v)", i, c, i+1, got)
 		}
 	}
-	if n := h.fr.callCount("s"); n != 5 {
+	if n := h.fr.callCount(sidS); n != 5 {
 		t.Fatalf("reads = %d, want 5 (one per event)", n)
 	}
 }
@@ -216,21 +216,21 @@ func TestIntakeQueueFullDropsNewEvent(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("t1")}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	<-entered // the worker holds event 1; the queue is empty
 	for at := int64(2); at <= 17; at++ {
-		h.in.OnTurnEnd(stopEv("s", at))
+		h.in.OnTurnEnd(stopEv(sidS, at))
 	}
 	if h.logged("queue full") {
 		t.Fatal("logged a drop with room left")
 	}
-	h.in.OnTurnEnd(stopEv("s", 99)) // the 17th queued: dropped
+	h.in.OnTurnEnd(stopEv(sidS, 99)) // the 17th queued: dropped
 	if !h.logged("queue full") {
 		t.Fatal("a dropped event was not logged")
 	}
 	close(gate)
 	h.waitSettled(18)
-	if n := h.fr.callCount("s"); n != 17 {
+	if n := h.fr.callCount(sidS); n != 17 {
 		t.Fatalf("reads = %d, want 17 (the dropped event is not processed)", n)
 	}
 	// the dropped event is still reported settled, so nothing waits on it
@@ -253,12 +253,12 @@ func TestIntakeBusyRetries(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("t1")}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	if !fileExists(h.seg("s", 1)) || len(h.writtenCalls()) != 1 {
+	if !fileExists(h.seg(sidS, 1)) || len(h.writtenCalls()) != 1 {
 		t.Fatal("busy three times then ok: nothing written")
 	}
-	if n := h.fr.callCount("s"); n != 4 {
+	if n := h.fr.callCount(sidS); n != 4 {
 		t.Fatalf("reads = %d, want 4", n)
 	}
 }
@@ -267,12 +267,12 @@ func TestIntakeBusyGivesUpButSettles(t *testing.T) {
 	h := newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
 		return convturns.TurnsFromResult{}, convfeed.ErrBusy
 	})
-	h.in.OnTurnEnd(stopEv("s", 7))
+	h.in.OnTurnEnd(stopEv(sidS, 7))
 	h.waitSettled(1)
-	if n := h.fr.callCount("s"); n != 4 {
+	if n := h.fr.callCount(sidS); n != 4 {
 		t.Fatalf("reads = %d, want 4 (1 + 3 retries)", n)
 	}
-	if fileExists(h.seg("s", 1)) || len(h.writtenCalls()) != 0 {
+	if fileExists(h.seg(sidS, 1)) || len(h.writtenCalls()) != 0 {
 		t.Fatal("wrote after giving up")
 	}
 	if got := h.settledCalls(); got[0].at != 7 {
@@ -284,12 +284,12 @@ func TestIntakeOtherErrorIsLoggedAndSettles(t *testing.T) {
 	h := newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
 		return convturns.TurnsFromResult{}, convfeed.ErrNotFound
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	if n := h.fr.callCount("s"); n != 1 {
+	if n := h.fr.callCount(sidS); n != 1 {
 		t.Fatalf("reads = %d, want 1 (no retry)", n)
 	}
-	if !h.logged("s") {
+	if !h.logged(sidS) {
 		t.Fatal("the error was not logged")
 	}
 }
@@ -306,7 +306,7 @@ func TestIntakeWaitsForTranscriptToCatchUp(t *testing.T) {
 	early := 0
 	h = newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
 		if n <= 3 {
-			if fileExists(h.seg("s", 1)) {
+			if fileExists(h.seg(sidS, 1)) {
 				early++
 			}
 			return fromRes([]convmodel.Turn{runningNoText("t1")}, from), nil
@@ -315,14 +315,14 @@ func TestIntakeWaitsForTranscriptToCatchUp(t *testing.T) {
 		tr.EndedAt = nil
 		return fromRes([]convmodel.Turn{tr}, from), nil
 	})
-	ev := stopEv("s", 1000)
+	ev := stopEv(sidS, 1000)
 	ev.Text = "all done"
 	h.in.OnTurnEnd(ev)
 	h.waitSettled(1)
 	if early != 0 {
 		t.Fatal("the turn was written before the transcript caught up")
 	}
-	if got := h.read("s", 1); !strings.Contains(got, "agent: all done") {
+	if got := h.read(sidS, 1); !strings.Contains(got, "agent: all done") {
 		t.Fatalf("file lacks the last words:\n%s", got)
 	}
 	w := h.writtenCalls()
@@ -343,18 +343,18 @@ func TestIntakeForcesAfterFifteenWaitsAndLaterTextJoinsTheTurn(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{tr}, from), nil
 	})
-	ev := stopEv("s", 1000)
+	ev := stopEv(sidS, 1000)
 	ev.Text = "late words"
 	h.in.OnTurnEnd(ev)
 	h.waitSettled(1)
-	if n := h.fr.callCount("s"); n != 16 {
+	if n := h.fr.callCount(sidS); n != 16 {
 		t.Fatalf("reads = %d, want 16 (1 + 15 waits)", n)
 	}
-	got := h.read("s", 1)
+	got := h.read(sidS, 1)
 	if !strings.Contains(got, "user: question t1") || strings.Contains(got, "late words") {
 		t.Fatalf("the forced write should hold the file as it was:\n%s", got)
 	}
-	if h.writtenCalls()[0].target != "t1" {
+	if h.writtenCalls()[0].target != "" {
 		t.Fatalf("target = %q", h.writtenCalls()[0].target)
 	}
 
@@ -363,11 +363,11 @@ func TestIntakeForcesAfterFifteenWaitsAndLaterTextJoinsTheTurn(t *testing.T) {
 	mu.Unlock()
 	h.in.OnTurnEnd(ev)
 	h.waitSettled(2)
-	got = h.read("s", 1)
+	got = h.read(sidS, 1)
 	if !strings.Contains(got, "agent: late words") || strings.Count(got, "user: question t1") != 1 {
 		t.Fatalf("the late words did not join the same turn:\n%s", got)
 	}
-	if st, _, _ := h.store.Session("s"); st.NextTurnNo != 2 {
+	if st, _, _ := h.store.Session(sidS); st.NextTurnNo != 2 {
 		t.Fatalf("the late words got a new turn number: %+v", st)
 	}
 }
@@ -385,12 +385,12 @@ func TestIntakeWaitingToolRetriesUntilDone(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{toolTurn(st)}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	if n := h.fr.callCount("s"); n != 3 {
+	if n := h.fr.callCount(sidS); n != 3 {
 		t.Fatalf("reads = %d, want 3", n)
 	}
-	if got := h.read("s", 1); !strings.Contains(got, "<tool Bash | ls>") {
+	if got := h.read(sidS, 1); !strings.Contains(got, "<tool Bash | ls>") {
 		t.Fatalf("file:\n%s", got)
 	}
 	if w := h.writtenCalls(); len(w) != 1 || w[0].wr.WaitingTool {
@@ -402,12 +402,12 @@ func TestIntakeWaitingToolForcesAfterFifteen(t *testing.T) {
 	h := newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
 		return fromRes([]convmodel.Turn{toolTurn(convmodel.StepRunning)}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	if n := h.fr.callCount("s"); n != 16 {
+	if n := h.fr.callCount(sidS); n != 16 {
 		t.Fatalf("reads = %d, want 16", n)
 	}
-	if !fileExists(h.seg("s", 1)) || len(h.writtenCalls()) != 1 {
+	if !fileExists(h.seg(sidS, 1)) || len(h.writtenCalls()) != 1 {
 		t.Fatal("force did not write")
 	}
 }
@@ -416,18 +416,18 @@ func TestIntakeWaitingToolForcesAfterFifteen(t *testing.T) {
 func TestIntakeNeedAllRereadsEverything(t *testing.T) {
 	turns := []convmodel.Turn{basicTurn("t1"), basicTurn("t2")}
 	h := newHarness(t, steady(turns...))
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
-	before := h.read("s", 1)
-	if err := os.Remove(h.seg("s", 1)); err != nil {
+	before := h.read(sidS, 1)
+	if err := os.Remove(h.seg(sidS, 1)); err != nil {
 		t.Fatal(err)
 	}
-	h.in.OnTurnEnd(stopEv("s", 2))
+	h.in.OnTurnEnd(stopEv(sidS, 2))
 	h.waitSettled(2)
-	if got := h.read("s", 1); got != before {
+	if got := h.read(sidS, 1); got != before {
 		t.Fatalf("rebuilt file differs:\n%s\n---\n%s", got, before)
 	}
-	if froms := h.fr.fromsOf("s"); strings.Join(froms, ",") != ",t2," {
+	if froms := h.fr.fromsOf(sidS); strings.Join(froms, ",") != ",t2," {
 		t.Fatalf("read cursors = %q, want first, the cursor, then the whole conversation", froms)
 	}
 	if len(h.writtenCalls()) != 2 {
@@ -438,7 +438,7 @@ func TestIntakeNeedAllRereadsEverything(t *testing.T) {
 // 8: the hooks get the target, the write result and the hook's text.
 func TestIntakeOnWrittenGetsTargetAndResult(t *testing.T) {
 	h := newHarness(t, steady(basicTurn("t1")))
-	ev := stopEv("s", 5)
+	ev := stopEv(sidS, 5)
 	ev.Text = "answer t1"
 	h.in.OnTurnEnd(ev)
 	h.waitSettled(1)
@@ -456,12 +456,12 @@ func TestIntakeOnWrittenGetsTargetAndResult(t *testing.T) {
 func TestIntakeWorkerEndsWhenIdleAndRestarts(t *testing.T) {
 	h := newHarness(t, steady(basicTurn("t1")))
 	h.in.d.timing.idle = 10 * time.Millisecond
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	h.waitSettled(1)
 	waitFor(t, "the idle worker to end", func() bool { return h.in.workers() == 0 })
-	h.in.OnTurnEnd(stopEv("s", 2))
+	h.in.OnTurnEnd(stopEv(sidS, 2))
 	h.waitSettled(2)
-	if n := h.fr.callCount("s"); n != 2 {
+	if n := h.fr.callCount(sidS); n != 2 {
 		t.Fatalf("reads = %d", n)
 	}
 }
@@ -477,7 +477,7 @@ func TestIntakeStopEndsWorkersAndIgnoresLaterEvents(t *testing.T) {
 		}
 		return fromRes([]convmodel.Turn{basicTurn("t1")}, from), nil
 	})
-	h.in.OnTurnEnd(stopEv("s", 1))
+	h.in.OnTurnEnd(stopEv(sidS, 1))
 	<-entered
 	stopped := make(chan struct{})
 	go func() { h.in.Stop(); close(stopped) }()
@@ -488,12 +488,12 @@ func TestIntakeStopEndsWorkersAndIgnoresLaterEvents(t *testing.T) {
 	}
 	close(gate)
 	<-stopped
-	if fileExists(h.seg("s", 1)) {
+	if fileExists(h.seg(sidS, 1)) {
 		t.Fatal("a write happened after Stop")
 	}
-	h.in.OnTurnEnd(stopEv("s", 2))
+	h.in.OnTurnEnd(stopEv(sidS, 2))
 	time.Sleep(20 * time.Millisecond)
-	if n := h.fr.callCount("s"); n != 1 {
+	if n := h.fr.callCount(sidS); n != 1 {
 		t.Fatalf("an event after Stop was read: %d reads", n)
 	}
 }

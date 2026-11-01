@@ -132,7 +132,7 @@ func done(id string, items ...convmodel.Item) convmodel.Turn {
 func TestWriterFirstWriteCompactFixture(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	turns := fixtureTurns(t, "compact")
-	r := e.write("s1", all(turns), "", false)
+	r := e.write(sidS1, all(turns), "", false)
 	if !r.First || r.Rebuilt || len(r.Turns) != 6 {
 		t.Fatalf("result = %+v", r)
 	}
@@ -144,16 +144,16 @@ func TestWriterFirstWriteCompactFixture(t *testing.T) {
 	if !ok {
 		t.Fatal("golden has no compaction boundary")
 	}
-	p1, p2 := e.seg("s1", 1), e.seg("s1", 2)
+	p1, p2 := e.seg(sidS1, 1), e.seg(sidS1, 2)
 	want1 := "<prev: none>\n<source: " + testSource + ">\n\n" + before + "\n<compacted | manual>\n<next: " + p2 + ">\n"
 	want2 := "<prev: " + p1 + ">\n<source: " + testSource + ">\n\n" + after
-	if got := e.read("s1", 1); got != want1 {
+	if got := e.read(sidS1, 1); got != want1 {
 		t.Errorf("001 = %q\nwant %q", got, want1)
 	}
-	if got := e.read("s1", 2); got != want2 {
+	if got := e.read(sidS1, 2); got != want2 {
 		t.Errorf("002 = %q\nwant %q", got, want2)
 	}
-	nos, err := e.store.TurnNos("s1")
+	nos, err := e.store.TurnNos(sidS1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,17 +176,17 @@ func TestWriterFirstWriteCompactFixture(t *testing.T) {
 func TestWriterRepeatedCallIsIdempotent(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "hi"), agentItem("a1", "hello")), done("t2", userItem("u2", "more"), agentItem("a2", "ok"))}
-	e.write("s", all(turns), "", false)
-	before := e.read("s", 1)
-	st1, _, _ := e.store.Session("s")
-	r := e.write("s", fromRes(turns, e.cursorOf("s")), "", false)
+	e.write(sidS, all(turns), "", false)
+	before := e.read(sidS, 1)
+	st1, _, _ := e.store.Session(sidS)
+	r := e.write(sidS, fromRes(turns, e.cursorOf(sidS)), "", false)
 	if r.First || r.Rebuilt || len(r.Turns) != 0 {
 		t.Errorf("result = %+v", r)
 	}
-	if got := e.read("s", 1); got != before {
+	if got := e.read(sidS, 1); got != before {
 		t.Errorf("file changed: %q", got)
 	}
-	st2, _, _ := e.store.Session("s")
+	st2, _, _ := e.store.Session(sidS)
 	if st1 != st2 {
 		t.Errorf("state changed: %+v -> %+v", st1, st2)
 	}
@@ -196,23 +196,23 @@ func TestWriterRepeatedCallIsIdempotent(t *testing.T) {
 func TestWriterCursorTurnGrowsWithCompaction(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	t1 := done("t1", userItem("u1", "hi"), agentItem("a1", "hello"))
-	e.write("s", all([]convmodel.Turn{t1}), "", false)
+	e.write(sidS, all([]convmodel.Turn{t1}), "", false)
 	t1b := done("t1", userItem("u1", "hi"), agentItem("a1", "hello"), compactItem("c1", "auto"))
 	t2 := done("t2", userItem("u2", "after"), agentItem("a2", "fine"))
 	turns := []convmodel.Turn{t1b, t2}
-	r := e.write("s", fromRes(turns, "t1"), "", false)
+	r := e.write(sidS, fromRes(turns, "t1"), "", false)
 	if len(r.Turns) != 1 || r.Turns[0].ID != "t2" || r.Turns[0].No != 2 {
 		t.Fatalf("result = %+v", r)
 	}
-	p2 := e.seg("s", 2)
-	if got := e.read("s", 1); !strings.HasSuffix(got, "\n<compacted | auto>\n<next: "+p2+">\n") || strings.Contains(got, "after") {
+	p2 := e.seg(sidS, 2)
+	if got := e.read(sidS, 1); !strings.HasSuffix(got, "\n<compacted | auto>\n<next: "+p2+">\n") || strings.Contains(got, "after") {
 		t.Errorf("001 = %q", got)
 	}
-	got2 := e.read("s", 2)
-	if !strings.HasPrefix(got2, "<prev: "+e.seg("s", 1)+">\n<source: "+testSource+">\n\nuser: after\n") || !strings.Contains(got2, "agent: fine") {
+	got2 := e.read(sidS, 2)
+	if !strings.HasPrefix(got2, "<prev: "+e.seg(sidS, 1)+">\n<source: "+testSource+">\n\nuser: after\n") || !strings.Contains(got2, "agent: fine") {
 		t.Errorf("002 = %q", got2)
 	}
-	st, _, _ := e.store.Session("s")
+	st, _, _ := e.store.Session(sidS)
 	if st.Segment != 2 || st.CursorTurn != "t2" || st.NextTurnNo != 3 {
 		t.Errorf("state = %+v", st)
 	}
@@ -224,23 +224,23 @@ func TestWriterCrashResidueIsTruncated(t *testing.T) {
 		return []convmodel.Turn{done("t1", userItem("u1", "hi"), agentItem("a1", "hello")), done("t2", userItem("u2", "two"), agentItem("a2", "ok"))}
 	}
 	control := newEnv(t, Hooks{})
-	control.write("s", all(mk()[:1]), "", false)
-	control.write("s", fromRes(mk(), control.cursorOf("s")), "", false)
+	control.write(sidS, all(mk()[:1]), "", false)
+	control.write(sidS, fromRes(mk(), control.cursorOf(sidS)), "", false)
 
 	e := newEnv(t, Hooks{})
-	e.write("s", all(mk()[:1]), "", false)
-	f, err := os.OpenFile(e.seg("s", 1), os.O_APPEND|os.O_WRONLY, 0)
+	e.write(sidS, all(mk()[:1]), "", false)
+	f, err := os.OpenFile(e.seg(sidS, 1), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.WriteString("\nuser: half-written crash residue")
 	f.Close()
-	r := e.write("s", fromRes(mk(), e.cursorOf("s")), "", false)
+	r := e.write(sidS, fromRes(mk(), e.cursorOf(sidS)), "", false)
 	if r.Rebuilt {
 		t.Error("a longer file is truncated, not rebuilt")
 	}
 	// the control file has different temp paths only in the header? source and prev are fixed, so equal.
-	if got, want := e.read("s", 1), control.read("s", 1); got != want {
+	if got, want := e.read(sidS, 1), control.read(sidS, 1); got != want {
 		t.Errorf("after crash repair %q, want %q", got, want)
 	}
 }
@@ -250,9 +250,9 @@ func TestWriterRebuild(t *testing.T) {
 	setup := func(t *testing.T) (*env, []convmodel.Turn, map[string]int, string, string) {
 		e := newEnv(t, Hooks{})
 		turns := fixtureTurns(t, "compact")
-		e.write("s", all(turns), "", false)
-		nos, _ := e.store.TurnNos("s")
-		return e, turns, nos, e.read("s", 1), e.read("s", 2)
+		e.write(sidS, all(turns), "", false)
+		nos, _ := e.store.TurnNos(sidS)
+		return e, turns, nos, e.read(sidS, 1), e.read(sidS, 2)
 	}
 	check := func(t *testing.T, e *env, r WriteResult, nos map[string]int, c1, c2 string) {
 		t.Helper()
@@ -262,50 +262,50 @@ func TestWriterRebuild(t *testing.T) {
 		if len(r.Turns) != 0 {
 			t.Errorf("these turns all had numbers already, so none is reported: %+v", r.Turns)
 		}
-		if e.read("s", 1) != c1 || e.read("s", 2) != c2 {
+		if e.read(sidS, 1) != c1 || e.read(sidS, 2) != c2 {
 			t.Error("rebuilt content differs")
 		}
-		got, _ := e.store.TurnNos("s")
+		got, _ := e.store.TurnNos(sidS)
 		for k, v := range nos {
 			if got[k] != v {
 				t.Errorf("turn %s no %d -> %d", k, v, got[k])
 			}
 		}
-		st, ok, _ := e.store.Session("s")
+		st, ok, _ := e.store.Session(sidS)
 		if !ok || st.NextTurnNo != 7 {
 			t.Errorf("state = %+v", st)
 		}
 	}
 	t.Run("file deleted", func(t *testing.T) {
 		e, turns, nos, c1, c2 := setup(t)
-		os.Remove(e.seg("s", 2))
-		cur := e.cursorOf("s")
-		_, err := e.w.Write("s", fromRes(turns, cur), "", false)
+		os.Remove(e.seg(sidS, 2))
+		cur := e.cursorOf(sidS)
+		_, err := e.w.Write(sidS, fromRes(turns, cur), "", false)
 		if !errors.Is(err, errNeedAll) {
 			t.Fatalf("err = %v, want errNeedAll", err)
 		}
-		r := e.write("s", all(turns), "", false)
+		r := e.write(sidS, all(turns), "", false)
 		check(t, e, r, nos, c1, c2)
 	})
 	t.Run("file shorter than recorded", func(t *testing.T) {
 		e, turns, nos, c1, c2 := setup(t)
-		if err := os.Truncate(e.seg("s", 2), 10); err != nil {
+		if err := os.Truncate(e.seg(sidS, 2), 10); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.w.Write("s", fromRes(turns, e.cursorOf("s")), "", false); !errors.Is(err, errNeedAll) {
+		if _, err := e.w.Write(sidS, fromRes(turns, e.cursorOf(sidS)), "", false); !errors.Is(err, errNeedAll) {
 			t.Fatalf("err = %v, want errNeedAll", err)
 		}
-		r := e.write("s", all(turns), "", false)
+		r := e.write(sidS, all(turns), "", false)
 		check(t, e, r, nos, c1, c2)
 	})
 	t.Run("not found", func(t *testing.T) {
 		e, turns, nos, c1, c2 := setup(t)
-		r := e.write("s", all(turns), "", false)
+		r := e.write(sidS, all(turns), "", false)
 		check(t, e, r, nos, c1, c2)
 	})
 	t.Run("item id mismatch", func(t *testing.T) {
 		e, turns, nos, c1, c2 := setup(t)
-		cur := e.cursorOf("s")
+		cur := e.cursorOf(sidS)
 		changed := append([]convmodel.Turn(nil), turns...)
 		for i := range changed {
 			if changed[i].ID == cur {
@@ -314,33 +314,33 @@ func TestWriterRebuild(t *testing.T) {
 				changed[i].Items = items
 			}
 		}
-		if _, err := e.w.Write("s", fromRes(changed, cur), "", false); !errors.Is(err, errNeedAll) {
+		if _, err := e.w.Write(sidS, fromRes(changed, cur), "", false); !errors.Is(err, errNeedAll) {
 			t.Fatalf("err = %v, want errNeedAll", err)
 		}
-		r := e.write("s", all(turns), "", false)
+		r := e.write(sidS, all(turns), "", false)
 		check(t, e, r, nos, c1, c2)
 	})
 	t.Run("fewer items", func(t *testing.T) {
 		e, turns, _, _, _ := setup(t)
-		cur := e.cursorOf("s")
+		cur := e.cursorOf(sidS)
 		changed := append([]convmodel.Turn(nil), turns...)
 		for i := range changed {
 			if changed[i].ID == cur {
 				changed[i].Items = changed[i].Items[:1]
 			}
 		}
-		if _, err := e.w.Write("s", fromRes(changed, cur), "", false); !errors.Is(err, errNeedAll) {
+		if _, err := e.w.Write(sidS, fromRes(changed, cur), "", false); !errors.Is(err, errNeedAll) {
 			t.Fatalf("err = %v, want errNeedAll", err)
 		}
 	})
 	t.Run("failed need-all leaves everything untouched", func(t *testing.T) {
 		e, turns, _, c1, c2 := setup(t)
-		os.Remove(e.seg("s", 2))
-		e.w.Write("s", fromRes(turns, e.cursorOf("s")), "", false)
-		if _, ok, _ := e.store.Session("s"); !ok {
+		os.Remove(e.seg(sidS, 2))
+		e.w.Write(sidS, fromRes(turns, e.cursorOf(sidS)), "", false)
+		if _, ok, _ := e.store.Session(sidS); !ok {
 			t.Error("state was reset by a refused call")
 		}
-		if e.read("s", 1) != c1 {
+		if e.read(sidS, 1) != c1 {
 			t.Error("001 touched by a refused call")
 		}
 		_ = c2
@@ -352,11 +352,11 @@ func TestWriterRunningTurn(t *testing.T) {
 	t.Run("non-target stops", func(t *testing.T) {
 		e := newEnv(t, Hooks{})
 		turns := []convmodel.Turn{done("t1", userItem("u1", "one"), agentItem("a1", "r1")), turn("t2", convmodel.OutcomeRunning, userItem("u2", "two"))}
-		r := e.write("s", all(turns), "other", false)
+		r := e.write(sidS, all(turns), "other", false)
 		if len(r.Turns) != 1 || r.WaitingTool {
 			t.Fatalf("result = %+v", r)
 		}
-		got := e.read("s", 1)
+		got := e.read(sidS, 1)
 		if !strings.Contains(got, "one") || strings.Contains(got, "two") {
 			t.Errorf("file = %q", got)
 		}
@@ -364,18 +364,18 @@ func TestWriterRunningTurn(t *testing.T) {
 	t.Run("target is written", func(t *testing.T) {
 		e := newEnv(t, Hooks{})
 		turns := []convmodel.Turn{done("t1", userItem("u1", "one")), turn("t2", convmodel.OutcomeRunning, userItem("u2", "two"), agentItem("a2", "partial"))}
-		r := e.write("s", all(turns), "t2", false)
+		r := e.write(sidS, all(turns), "t2", false)
 		if len(r.Turns) != 2 {
 			t.Fatalf("result = %+v", r)
 		}
-		if got := e.read("s", 1); !strings.Contains(got, "agent: partial") {
+		if got := e.read(sidS, 1); !strings.Contains(got, "agent: partial") {
 			t.Errorf("file = %q", got)
 		}
 		// the turn grows: the second half is appended, nothing repeated
 		turns[1].Items = append(turns[1].Items, agentItem("a3", "later"))
 		turns[1].Outcome = convmodel.OutcomeDone
-		e.write("s", fromRes(turns, e.cursorOf("s")), "", false)
-		got := e.read("s", 1)
+		e.write(sidS, fromRes(turns, e.cursorOf(sidS)), "", false)
+		got := e.read(sidS, 1)
 		if strings.Count(got, "agent: partial") != 1 || !strings.Contains(got, "agent: later") {
 			t.Errorf("file = %q", got)
 		}
@@ -394,39 +394,39 @@ func TestWriterRunningTool(t *testing.T) {
 	}
 	t.Run("waits then writes the answer", func(t *testing.T) {
 		e := newEnv(t, Hooks{})
-		r := e.write("s", all(mk(q(convmodel.StepRunning, nil))), "", false)
+		r := e.write(sidS, all(mk(q(convmodel.StepRunning, nil))), "", false)
 		if !r.WaitingTool || len(r.Turns) != 0 {
 			t.Fatalf("result = %+v", r)
 		}
-		if _, err := os.Stat(e.seg("s", 1)); !os.IsNotExist(err) {
+		if _, err := os.Stat(e.seg(sidS, 1)); !os.IsNotExist(err) {
 			t.Error("nothing should be written while a tool runs")
 		}
-		if _, ok, _ := e.store.Session("s"); ok {
+		if _, ok, _ := e.store.Session(sidS); ok {
 			t.Error("no state before anything is written")
 		}
-		r = e.write("s", all(mk(q(convmodel.StepDone, [][]string{{"yes"}}))), "", false)
+		r = e.write(sidS, all(mk(q(convmodel.StepDone, [][]string{{"yes"}}))), "", false)
 		if r.WaitingTool || len(r.Turns) != 1 {
 			t.Fatalf("result = %+v", r)
 		}
-		got := e.read("s", 1)
+		got := e.read(sidS, 1)
 		if !strings.Contains(got, "<tool AskUserQuestion | recap into push?>\n<answer | yes>\n") {
 			t.Errorf("file = %q", got)
 		}
 	})
 	t.Run("force writes as it is", func(t *testing.T) {
 		e := newEnv(t, Hooks{})
-		r := e.write("s", all(mk(q(convmodel.StepRunning, nil))), "", true)
+		r := e.write(sidS, all(mk(q(convmodel.StepRunning, nil))), "", true)
 		if r.WaitingTool || len(r.Turns) != 1 {
 			t.Fatalf("result = %+v", r)
 		}
-		if got := e.read("s", 1); !strings.Contains(got, "<tool AskUserQuestion | recap into push?>") || strings.Contains(got, "<answer") {
+		if got := e.read(sidS, 1); !strings.Contains(got, "<tool AskUserQuestion | recap into push?>") || strings.Contains(got, "<answer") {
 			t.Errorf("file = %q", got)
 		}
 	})
 	t.Run("running tool in the target turn also waits", func(t *testing.T) {
 		e := newEnv(t, Hooks{})
 		turns := []convmodel.Turn{turn("t1", convmodel.OutcomeRunning, userItem("u1", "go"), stepItem("x", "Bash", "ls", convmodel.StepRunning))}
-		r := e.write("s", all(turns), "t1", false)
+		r := e.write(sidS, all(turns), "t1", false)
 		if !r.WaitingTool || len(r.Turns) != 0 {
 			t.Fatalf("result = %+v", r)
 		}
@@ -437,39 +437,31 @@ func TestWriterRunningTool(t *testing.T) {
 func TestWriterHandoffLinksSessions(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	a := []convmodel.Turn{done("a1", userItem("u1", "in A"), agentItem("x1", "A reply"))}
-	e.write("A", all(a), "", false)
-	if got := e.read("A", 1); !strings.HasPrefix(got, "<prev: none>\n") {
+	e.write(sidA, all(a), "", false)
+	if got := e.read(sidA, 1); !strings.HasPrefix(got, "<prev: none>\n") {
 		t.Fatalf("A header = %q", got)
 	}
-	e.prevs["B"] = "A"
+	e.prevs[sidB] = sidA
 	b := []convmodel.Turn{done("b1", userItem("u2", "in B"), agentItem("x2", "B reply"))}
-	r := e.write("B", all(b), "", false)
+	r := e.write(sidB, all(b), "", false)
 	if !r.First {
 		t.Errorf("result = %+v", r)
 	}
-	aLast := e.seg("A", 1)
-	if got := e.read("B", 1); !strings.HasPrefix(got, "<prev: "+aLast+">\n<source: "+testSource+">\n\n") {
+	aLast := e.seg(sidA, 1)
+	if got := e.read(sidB, 1); !strings.HasPrefix(got, "<prev: "+aLast+">\n<source: "+testSource+">\n\n") {
 		t.Errorf("B 001 = %q", got)
 	}
-	wantTail := "\n<next: " + e.seg("B", 1) + ">\n"
-	gotA := e.read("A", 1)
-	if !strings.HasSuffix(gotA, wantTail) {
-		t.Fatalf("A tail = %q", gotA)
-	}
-	// A is written again: the next line is not mistaken for crash residue
-	a = append(a, done("a2", userItem("u3", "A again"), agentItem("x3", "back")))
-	e.write("A", fromRes(a, e.cursorOf("A")), "", false)
-	gotA = e.read("A", 1)
-	if strings.Count(gotA, "<next: "+e.seg("B", 1)+">") != 1 || !strings.Contains(gotA, "A again") {
-		t.Errorf("A = %q", gotA)
+	// the previous session file is not touched: no <next:> line
+	if gotA := e.read(sidA, 1); strings.Contains(gotA, "<next:") {
+		t.Errorf("A was extended: %q", gotA)
 	}
 }
 
 func TestWriterPermissions(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	turns := fixtureTurns(t, "compact")
-	e.write("s", all(turns), "", false)
-	for _, p := range []string{e.root, filepath.Join(e.root, "s")} {
+	e.write(sidS, all(turns), "", false)
+	for _, p := range []string{e.root, filepath.Join(e.root, sidS)} {
 		fi, err := os.Stat(p)
 		if err != nil {
 			t.Fatal(err)
@@ -479,7 +471,7 @@ func TestWriterPermissions(t *testing.T) {
 		}
 	}
 	for n := 1; n <= 2; n++ {
-		fi, err := os.Stat(e.seg("s", n))
+		fi, err := os.Stat(e.seg(sidS, n))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -497,12 +489,12 @@ func TestWriterPlacedHookOnRebuild(t *testing.T) {
 		return nil
 	}})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "one"), agentItem("a1", "r1")), done("t2", userItem("u2", "two"))}
-	e.write("s", all(turns), "", false)
-	if strings.Contains(e.read("s", 1), "turn-summary") {
+	e.write(sidS, all(turns), "", false)
+	if strings.Contains(e.read(sidS, 1), "turn-summary") {
 		t.Error("Placed is only for rebuilds")
 	}
-	e.write("s", all(turns), "", false) // Found=false with a cursor: rebuild
-	got := e.read("s", 1)
+	e.write(sidS, all(turns), "", false) // Found=false with a cursor: rebuild
+	got := e.read(sidS, 1)
 	i, j, k := strings.Index(got, "agent: r1"), strings.Index(got, "<turn-summary 1 | x>\nbody\n"), strings.Index(got, "user: two")
 	if !(i >= 0 && i < j && j < k) {
 		t.Errorf("file = %q", got)
@@ -517,15 +509,15 @@ func TestWriterCarriedRecapOnNewSegment(t *testing.T) {
 		return "<carried recap 05:44 | turns 1–1>\nheadline: x\n"
 	}})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "a"), compactItem("c", "auto")), done("t2", userItem("u2", "b"))}
-	e.write("s", all(turns), "", false)
-	if got := e.read("s", 1); strings.Contains(got, "carried") {
+	e.write(sidS, all(turns), "", false)
+	if got := e.read(sidS, 1); strings.Contains(got, "carried") {
 		t.Errorf("001 = %q", got)
 	}
-	want := "<prev: " + e.seg("s", 1) + ">\n<source: " + testSource + ">\n<carried recap 05:44 | turns 1–1>\nheadline: x\n\nuser: b\n"
-	if got := e.read("s", 2); got != want {
+	want := "<prev: " + e.seg(sidS, 1) + ">\n<source: " + testSource + ">\n<carried recap 05:44 | turns 1–1>\nheadline: x\n\nuser: b\n"
+	if got := e.read(sidS, 2); got != want {
 		t.Errorf("002 = %q\nwant %q", got, want)
 	}
-	if gotSid != "s" || gotBefore != 1 {
+	if gotSid != sidS || gotBefore != 1 {
 		t.Errorf("Carried(%q, %d), want (s, 1): the boundary is in turn 1", gotSid, gotBefore)
 	}
 }
@@ -534,9 +526,9 @@ func TestWriterCarriedRecapOnNewSegment(t *testing.T) {
 func TestWriterRebuildReportsNewTurn(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two"))}
-	e.write("s", all(turns), "", false)
+	e.write(sidS, all(turns), "", false)
 	turns = append(turns, done("t3", userItem("u3", "three")))
-	r := e.write("s", all(turns), "", false) // Found=false with a cursor: rebuild
+	r := e.write(sidS, all(turns), "", false) // Found=false with a cursor: rebuild
 	if !r.Rebuilt || r.First {
 		t.Fatalf("result = %+v", r)
 	}
@@ -553,22 +545,22 @@ func TestWriterRebuildSurvivesCrashAfterReset(t *testing.T) {
 		return []string{"<turn-summary " + turnID + ">"}
 	}})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two"))}
-	e.write("s", all(turns), "", false)
+	e.write(sidS, all(turns), "", false)
 	if placed != 0 {
 		t.Fatal("Placed is only for rebuilds")
 	}
-	if err := e.store.ResetForRebuild("s"); err != nil { // the daemon dies right here
+	if err := e.store.ResetForRebuild(sidS); err != nil { // the daemon dies right here
 		t.Fatal(err)
 	}
-	r := e.write("s", all(turns), "", false)
+	r := e.write(sidS, all(turns), "", false)
 	if !r.Rebuilt || placed != 2 {
 		t.Fatalf("result = %+v, placed = %d", r, placed)
 	}
-	got := e.read("s", 1)
+	got := e.read(sidS, 1)
 	if strings.Count(got, "user: one") != 1 || !strings.Contains(got, "<turn-summary t2>") {
 		t.Errorf("file = %q", got)
 	}
-	if st, _, _ := e.store.Session("s"); st.Rebuilding {
+	if st, _, _ := e.store.Session(sidS); st.Rebuilding {
 		t.Error("finished rebuild left the flag set")
 	}
 }
@@ -582,19 +574,19 @@ func TestWriterRebuildAfterResetRemovesStaleSegments(t *testing.T) {
 		done("t2", userItem("u2", "two"), compactItem("c2", "auto")),
 		done("t3", userItem("u3", "three")),
 	}
-	e.write("s", all(turns), "", false)
-	if _, err := os.Stat(e.seg("s", 3)); err != nil {
+	e.write(sidS, all(turns), "", false)
+	if _, err := os.Stat(e.seg(sidS, 3)); err != nil {
 		t.Fatalf("setup: no third segment: %v", err)
 	}
-	if err := e.store.ResetForRebuild("s"); err != nil { // the daemon dies before the files go
+	if err := e.store.ResetForRebuild(sidS); err != nil { // the daemon dies before the files go
 		t.Fatal(err)
 	}
 	rewritten := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two")), done("t3", userItem("u3", "three"))}
-	if r := e.write("s", all(rewritten), "", false); !r.Rebuilt {
+	if r := e.write(sidS, all(rewritten), "", false); !r.Rebuilt {
 		t.Fatalf("result = %+v", r)
 	}
 	for _, n := range []int{2, 3} {
-		if _, err := os.Stat(e.seg("s", n)); !os.IsNotExist(err) {
+		if _, err := os.Stat(e.seg(sidS, n)); !os.IsNotExist(err) {
 			t.Errorf("segment %d stayed behind (err %v)", n, err)
 		}
 	}
@@ -604,26 +596,26 @@ func TestWriterRebuildAfterResetRemovesStaleSegments(t *testing.T) {
 func TestWriterInterruptedRebuildResumes(t *testing.T) {
 	e := newEnv(t, Hooks{Placed: func(sid, turnID string) []string { return []string{"<turn-summary " + turnID + ">"} }})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two")), done("t3", userItem("u3", "three"))}
-	e.write("s", all(turns), "", false)
+	e.write(sidS, all(turns), "", false)
 	cut := []convmodel.Turn{done("t1", userItem("u1", "one")), turn("t2", convmodel.OutcomeRunning, userItem("u2", "two")), turns[2]}
-	r := e.write("s", all(cut), "other", false) // rebuild; stops at the running t2
+	r := e.write(sidS, all(cut), "other", false) // rebuild; stops at the running t2
 	if !r.Rebuilt {
 		t.Fatalf("result = %+v", r)
 	}
-	if st, _, _ := e.store.Session("s"); !st.Rebuilding || st.CursorTurn != "t1" {
+	if st, _, _ := e.store.Session(sidS); !st.Rebuilding || st.CursorTurn != "t1" {
 		t.Fatalf("state after the cut = %+v", st)
 	}
-	r = e.write("s", fromRes(turns, e.cursorOf("s")), "", false)
+	r = e.write(sidS, fromRes(turns, e.cursorOf(sidS)), "", false)
 	if !r.Rebuilt {
 		t.Errorf("resumed write = %+v, want Rebuilt", r)
 	}
-	got := e.read("s", 1)
+	got := e.read(sidS, 1)
 	for _, id := range []string{"t1", "t2", "t3"} {
 		if strings.Count(got, "<turn-summary "+id+">") != 1 {
 			t.Errorf("summary of %s not exactly once: %q", id, got)
 		}
 	}
-	if st, _, _ := e.store.Session("s"); st.Rebuilding {
+	if st, _, _ := e.store.Session(sidS); st.Rebuilding {
 		t.Error("flag still set after the whole conversation was written")
 	}
 }
@@ -636,11 +628,11 @@ func TestWriterOrphanRunningToolInHistory(t *testing.T) {
 			done("t1", userItem("u1", "one"), stepItem("x", "Bash", "ls", convmodel.StepRunning)),
 			done("t2", userItem("u2", "two"), agentItem("a2", "ok")),
 		}
-		r := e.write("s", all(turns), "", false)
+		r := e.write(sidS, all(turns), "", false)
 		if r.WaitingTool || len(r.Turns) != 2 {
 			t.Fatalf("result = %+v", r)
 		}
-		if got := e.read("s", 1); !strings.Contains(got, "user: two") {
+		if got := e.read(sidS, 1); !strings.Contains(got, "user: two") {
 			t.Errorf("file = %q", got)
 		}
 	})
@@ -650,7 +642,7 @@ func TestWriterOrphanRunningToolInHistory(t *testing.T) {
 			done("t1", userItem("u1", "one"), stepItem("x", "Bash", "ls", convmodel.StepRunning)),
 			done("t2", userItem("u2", "two"), stepItem("y", "Bash", "pwd", convmodel.StepRunning)),
 		}
-		r := e.write("s", all(turns), "", false)
+		r := e.write(sidS, all(turns), "", false)
 		if !r.WaitingTool || len(r.Turns) != 1 || r.Turns[0].ID != "t1" {
 			t.Fatalf("result = %+v", r)
 		}
@@ -663,18 +655,18 @@ func TestWriterCommitFailureThenRetry(t *testing.T) {
 		return []convmodel.Turn{done("t1", userItem("u1", "hi"), agentItem("a1", "hello")), done("t2", userItem("u2", "two"), agentItem("a2", "ok"))}
 	}
 	control := newEnv(t, Hooks{})
-	control.write("s", all(mk()[:1]), "", false)
-	wantRes := control.write("s", fromRes(mk(), control.cursorOf("s")), "", false)
+	control.write(sidS, all(mk()[:1]), "", false)
+	wantRes := control.write(sidS, fromRes(mk(), control.cursorOf(sidS)), "", false)
 
 	e := newEnv(t, Hooks{})
-	e.write("s", all(mk()[:1]), "", false)
+	e.write(sidS, all(mk()[:1]), "", false)
 	e.store.failAfterSession = func() error { return errors.New("boom") }
-	if _, err := e.w.Write("s", fromRes(mk(), e.cursorOf("s")), "", false); err == nil {
+	if _, err := e.w.Write(sidS, fromRes(mk(), e.cursorOf(sidS)), "", false); err == nil {
 		t.Fatal("Write should return the Commit error")
 	}
 	e.store.failAfterSession = nil
-	r := e.write("s", fromRes(mk(), e.cursorOf("s")), "", false)
-	if got, want := e.read("s", 1), control.read("s", 1); got != want {
+	r := e.write(sidS, fromRes(mk(), e.cursorOf(sidS)), "", false)
+	if got, want := e.read(sidS, 1), control.read(sidS, 1); got != want {
 		t.Errorf("file = %q, want %q", got, want)
 	}
 	if len(r.Turns) != len(wantRes.Turns) || r.Turns[0].No != wantRes.Turns[0].No {
@@ -688,27 +680,27 @@ func TestWriterCrashDuringSegmentChange(t *testing.T) {
 	t1 := done("t1", userItem("u1", "hi"), agentItem("a1", "hello"))
 	t2 := done("t2", userItem("u2", "two"), compactItem("c", "auto"), userItem("u3", "after"))
 	control := newEnv(t, Hooks{})
-	control.write("s", all([]convmodel.Turn{t1}), "", false)
-	control.write("s", fromRes([]convmodel.Turn{t1, t2}, control.cursorOf("s")), "", false)
+	control.write(sidS, all([]convmodel.Turn{t1}), "", false)
+	control.write(sidS, fromRes([]convmodel.Turn{t1, t2}, control.cursorOf(sidS)), "", false)
 
 	e := newEnv(t, Hooks{})
-	e.write("s", all([]convmodel.Turn{t1}), "", false)
-	f, err := os.OpenFile(e.seg("s", 1), os.O_APPEND|os.O_WRONLY, 0)
+	e.write(sidS, all([]convmodel.Turn{t1}), "", false)
+	f, err := os.OpenFile(e.seg(sidS, 1), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString("\nuser: two\n\n<compacted | auto>\n<next: " + e.seg("s", 2) + ">\n")
+	f.WriteString("\nuser: two\n\n<compacted | auto>\n<next: " + e.seg(sidS, 2) + ">\n")
 	f.Close()
-	if err := os.WriteFile(e.seg("s", 2), []byte("<prev: x>\n<source: y>\n\nuser: incomp"), 0o600); err != nil {
+	if err := os.WriteFile(e.seg(sidS, 2), []byte("<prev: x>\n<source: y>\n\nuser: incomp"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := e.write("s", fromRes([]convmodel.Turn{t1, t2}, e.cursorOf("s")), "", false)
+	r := e.write(sidS, fromRes([]convmodel.Turn{t1, t2}, e.cursorOf(sidS)), "", false)
 	if r.Rebuilt {
 		t.Error("repaired by truncating, not rebuilt")
 	}
 	for n := 1; n <= 2; n++ {
-		got := strings.ReplaceAll(e.read("s", n), e.root, "ROOT")
-		if want := strings.ReplaceAll(control.read("s", n), control.root, "ROOT"); got != want {
+		got := strings.ReplaceAll(e.read(sidS, n), e.root, "ROOT")
+		if want := strings.ReplaceAll(control.read(sidS, n), control.root, "ROOT"); got != want {
 			t.Errorf("%03d = %q, want %q", n, got, want)
 		}
 	}
@@ -719,33 +711,13 @@ func TestWriterFoundWithoutStateNeedsAll(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "hi"))}
 	res := convturns.TurnsFromResult{Turns: turns, Found: true, Path: testSource}
-	if _, err := e.w.Write("s", res, "", false); !errors.Is(err, errNeedAll) {
+	if _, err := e.w.Write(sidS, res, "", false); !errors.Is(err, errNeedAll) {
 		t.Fatalf("err = %v, want errNeedAll", err)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "s")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(e.root, sidS)); !os.IsNotExist(err) {
 		t.Error("a file or dir was created")
 	}
-	if _, ok, _ := e.store.Session("s"); ok {
+	if _, ok, _ := e.store.Session(sidS); ok {
 		t.Error("the store was written")
-	}
-}
-
-// a previous segment that cannot be extended is skipped, and the skip is logged
-func TestWriterLinkNextSkipIsLogged(t *testing.T) {
-	e := newEnv(t, Hooks{})
-	e.write("A", all([]convmodel.Turn{done("a1", userItem("u1", "in A"))}), "", false)
-	f, err := os.OpenFile(e.seg("A", 1), os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.WriteString("\nresidue")
-	f.Close()
-	e.prevs["B"] = "A"
-	e.write("B", all([]convmodel.Turn{done("b1", userItem("u2", "in B"))}), "", false)
-	if strings.Contains(e.read("A", 1), "<next:") {
-		t.Error("A was extended despite its length not matching the state")
-	}
-	if len(e.logs) == 0 || !strings.Contains(e.logs[0], "A") {
-		t.Errorf("logs = %q", e.logs)
 	}
 }

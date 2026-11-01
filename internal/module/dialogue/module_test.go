@@ -103,8 +103,8 @@ func TestModuleRecordsTurnEndsThenStopsWriting(t *testing.T) {
 	if st := m.Status(); st["ready"] != true || st["init_error"] != "" {
 		t.Fatalf("status = %v", st)
 	}
-	seg := filepath.Join(dir, "dialogue", "s1", "001.md")
-	sub.emit(stopEv("s1", 1))
+	seg := filepath.Join(dir, "dialogue", sidS1, "001.md")
+	sub.emit(stopEv(sidS1, 1))
 	waitFor(t, "the dialogue file", func() bool { return fileExists(seg) })
 	if fi, err := os.Stat(seg); err != nil || fi.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("segment mode: %v %v", fi, err)
@@ -116,8 +116,8 @@ func TestModuleRecordsTurnEndsThenStopsWriting(t *testing.T) {
 	if sub.unsub != 1 {
 		t.Fatalf("unsubscribed %d times", sub.unsub)
 	}
-	sub.emit(stopEv("s2", 2)) // a late delivery from the hub's queue
-	if fileExists(filepath.Join(dir, "dialogue", "s2", "001.md")) || fr.callCount("s2") != 0 {
+	sub.emit(stopEv(sidS2, 2)) // a late delivery from the hub's queue
+	if fileExists(filepath.Join(dir, "dialogue", sidS2, "001.md")) || fr.callCount(sidS2) != 0 {
 		t.Fatal("an event after Stop was handled")
 	}
 	if err := m.Close(); err != nil {

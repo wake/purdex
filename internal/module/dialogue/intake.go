@@ -96,6 +96,12 @@ func (in *intake) OnTurnEnd(ev agentmod.TurnEndEvent) {
 	if ev.SessionID == "" {
 		return
 	}
+	if !validSessionID(ev.SessionID) {
+		// the id becomes a directory name: anything but a UUID is dropped here, and nothing waits for it
+		in.log("[dialogue] a turn-end event (at %d) has an invalid session id %q: dropped", ev.At, ev.SessionID)
+		in.settled(ev.SessionID, ev.At)
+		return
+	}
 	in.mu.Lock()
 	if in.stopped {
 		in.mu.Unlock()
@@ -245,8 +251,10 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 				continue
 			}
 			// still behind after the waits: write the file as it is; whatever comes later is picked up from the cursor
+			// No target: the event could not be matched to a turn, so Write goes as far as it can instead of stopping at
+			// a guess (pinning it to the newest turn would hand later Stops' turns to this one).
 			force = true
-			target = len(res.Turns) - 1
+			target = -1
 			in.log("[dialogue] session %s: the transcript had not caught up with a Stop after %d waits; written as it is", sid, settleRetries)
 		}
 		targetID := ""
