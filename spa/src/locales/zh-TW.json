@@ -3310,7 +3310,6 @@
   "personal.settings.new_group": "新增任務編組",
   "personal.settings.take_out": "移出",
   "personal.settings.rename": "改名",
-  "personal.settings.ungrouped_hint": "這個 session 還沒有編組。選一個任務編組，或新增一個。",
   "watch.look.title": "側欄顯示",
   "watch.look.daemon_note": "顏色與圖示跟這台分頁上的主機徽章是同一份。",
   "watch.look.preview": "預覽",

@@ -3310,7 +3310,6 @@
   "personal.settings.new_group": "New task group",
   "personal.settings.take_out": "Take out",
   "personal.settings.rename": "Rename",
-  "personal.settings.ungrouped_hint": "This session is in no group. Pick a task group, or start a new one.",
   "watch.look.title": "Sidebar look",
   "watch.look.daemon_note": "The colour and icon are the same as on this host's tab badge.",
   "watch.look.preview": "Preview",
