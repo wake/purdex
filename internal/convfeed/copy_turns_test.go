@@ -43,3 +43,42 @@ func TestCopyLastTurns_FewerThanAskedAndNone(t *testing.T) {
 		t.Fatalf("n=0 gave %d turns", len(got))
 	}
 }
+
+func TestCopyTurnsFrom(t *testing.T) {
+	e := filled(t, 4)
+	all := e.CopyLastTurns(10)
+	cases := []struct {
+		name      string
+		from      string
+		wantFirst int
+		wantLen   int
+		found     bool
+	}{
+		{"middle", all[1].ID, 1, 3, true},
+		{"last", all[3].ID, 3, 1, true},
+		{"first", all[0].ID, 0, 4, true},
+		{"unknown", "nope", 0, 4, false},
+		{"empty", "", 0, 4, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, found := e.CopyTurnsFrom(c.from)
+			if found != c.found || len(got) != c.wantLen || got[0].Index != c.wantFirst {
+				t.Fatalf("found=%v len=%d first=%d, want %v/%d/%d", found, len(got), got[0].Index, c.found, c.wantLen, c.wantFirst)
+			}
+		})
+	}
+}
+
+func TestCopyTurnsFrom_SharesNothingWithTheEntry(t *testing.T) {
+	e := filled(t, 3)
+	id := e.CopyLastTurns(3)[1].ID
+	got, _ := e.CopyTurnsFrom(id)
+	got[0].ID = "changed"
+	got[0].Items[0].User.Text = "changed"
+	got[0].Items = got[0].Items[:0]
+	again, found := e.CopyTurnsFrom(id)
+	if !found || again[0].ID != id || len(again[0].Items) == 0 || again[0].Items[0].User.Text == "changed" {
+		t.Fatalf("the entry moved: %+v", again[0])
+	}
+}

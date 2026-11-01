@@ -36,6 +36,37 @@ func (e *Entry) CopyLastTurns(n int) []convmodel.Turn {
 	return out
 }
 
+// CopyTurnsFrom returns the turn whose id is fromID and every turn after it (oldest first) as a deep copy made under the
+// entry's lock, with found=true. An empty fromID, or one no turn has any more, returns every turn with found=false. The copy
+// is made as in CopyLastTurns: nothing in it is shared with the entry, and a turn that cannot be copied is left out.
+func (e *Entry) CopyTurnsFrom(fromID string) (turns []convmodel.Turn, found bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	all := e.conv().Turns
+	start := 0
+	if fromID != "" {
+		for i, t := range all {
+			if t.ID == fromID {
+				start, found = i, true
+				break
+			}
+		}
+	}
+	out := make([]convmodel.Turn, 0, len(all)-start)
+	for _, t := range all[start:] {
+		b, err := json.Marshal(t)
+		if err != nil {
+			continue
+		}
+		var c convmodel.Turn
+		if err := json.Unmarshal(b, &c); err != nil {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, found
+}
+
 // UserMessage is a person's message of the conversation, as far as the echo pairing looks at it.
 type UserMessage struct {
 	ID   string

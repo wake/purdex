@@ -351,28 +351,37 @@ type resolveError struct{ error }
 // refresh resolves the transcript and feeds the entry from it. A file that shrinks under a read is retried once
 // against a fresh resolution. Every opened file is closed on every path, panics included.
 func (m *Module) refresh(ctx context.Context, entry *convfeed.Entry, sid string) error {
-	var err error
-	for attempt := 0; attempt < 2; attempt++ {
-		if err = m.refreshOnce(ctx, entry, sid); !errors.Is(err, convfeed.ErrFileChanged) {
-			return err
-		}
-	}
+	_, err := m.refreshPath(ctx, entry, sid)
 	return err
 }
 
-func (m *Module) refreshOnce(ctx context.Context, entry *convfeed.Entry, sid string) error {
+// refreshPath is refresh that also returns the transcript path of the last resolution that was read.
+func (m *Module) refreshPath(ctx context.Context, entry *convfeed.Entry, sid string) (string, error) {
+	var (
+		path string
+		err  error
+	)
+	for attempt := 0; attempt < 2; attempt++ {
+		if path, err = m.refreshOnce(ctx, entry, sid); !errors.Is(err, convfeed.ErrFileChanged) {
+			return path, err
+		}
+	}
+	return path, err
+}
+
+func (m *Module) refreshOnce(ctx context.Context, entry *convfeed.Entry, sid string) (string, error) {
 	src, err := m.resolver.Resolve(ctx, sid)
 	if err != nil {
 		if errors.Is(err, convfeed.ErrNotFound) || ctx.Err() != nil {
-			return err
+			return "", err
 		}
-		return resolveError{err}
+		return "", resolveError{err}
 	}
 	defer src.Closer.Close()
 	if _, err = entry.Refresh(ctx, src); err != nil {
-		return err
+		return src.Path, err
 	}
 	m.applyAbort(entry, sid)
 	m.applyBackground(entry, sid)
-	return nil
+	return src.Path, nil
 }

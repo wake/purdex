@@ -3,6 +3,8 @@ package conversation
 import (
 	"context"
 	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -131,5 +133,39 @@ func TestLastTurns_OtherProviderAndBadCount(t *testing.T) {
 	}
 	if _, err := e.mod.LastTurns(context.Background(), "claude", sid, 0); err == nil {
 		t.Fatal("n = 0 must be an error")
+	}
+}
+
+func TestTurnsFrom_OtherProvider(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	if _, err := e.mod.TurnsFrom(context.Background(), "codex", sid, ""); !errors.Is(err, convturns.ErrUnsupportedProvider) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTurnsFrom_CompactFixtureMatchesLastTurnsAndReportsPath(t *testing.T) {
+	raw, err := os.ReadFile("../../../testdata/conversation/v1/cc-transcript/compact/input.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t)
+	p := e.transcript(string(raw))
+	ctx := context.Background()
+	want, err := e.mod.LastTurns(ctx, "claude", sid, 1000)
+	if err != nil || len(want) == 0 {
+		t.Fatalf("last turns: %d %v", len(want), err)
+	}
+	res, err := e.mod.TurnsFrom(ctx, "claude", sid, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != p || res.Found || !reflect.DeepEqual(res.Turns, want) {
+		t.Fatalf("path=%q (want %q) found=%v turns=%d (want %d)", res.Path, p, res.Found, len(res.Turns), len(want))
+	}
+	from := want[len(want)-1].ID
+	res, err = e.mod.TurnsFrom(ctx, "claude", sid, from)
+	if err != nil || !res.Found || len(res.Turns) != 1 || res.Turns[0].ID != from {
+		t.Fatalf("from last: %+v %v", res, err)
 	}
 }
