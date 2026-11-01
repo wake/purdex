@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.779] - 2026-11-02
+
+> **面板裡的淡字調亮。** 只有 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。daemon、mod、wwd 都沒改：不用部署 daemon、不用跑 `pdx setup`、不重裝 wwd。依賴沒變，不用 `pnpm install`。
+
+### Changed
+
+- **面板區裡的次要文字與淡字調亮（#3982）**：團隊面板、個人面板、recap 歷史，以及從面板打開的團隊編輯浮層，裡面的 `text-secondary` 與 `text-muted` 各自往主題的主要文字色混合。深色主題在面板底色上：secondary 6.3 → 8.6:1、muted 3.3 → 6.8:1；主要文字仍是最亮的一層。依主題自己的顏色計算，四個內建主題與自訂主題都會跟著調。面板以外的顏色不變。
+
 ## [1.0.0-alpha.778] - 2026-11-02
 
 > **修正 777 的 App 看不到團隊面板、個人面板與 recap 歷史。** 只有 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。daemon、mod、wwd 都沒改：不用部署 daemon、不用跑 `pdx setup`、不重裝 wwd。依賴沒變，不用 `pnpm install`。
