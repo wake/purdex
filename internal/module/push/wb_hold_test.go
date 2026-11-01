@@ -117,6 +117,19 @@ func TestWBHold_NoLineSendsTodaysPush(t *testing.T) {
 	}
 }
 
+// Nobody registered workbooklines.Key (the workbook module is gone, the dialogue module not yet there): the Stop push goes at
+// once with the original text, even with a push wait configured, and carries no workbook object.
+func TestWBHold_NoLinesRegisteredSendsTheOriginalText(t *testing.T) {
+	e := newAgentEnv(t, time.Hour)
+	e.mod.core.Registry.Register(workbooksettings.Key, fakeSettings{5})
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.feed.emit(nev("c1", "PdxStop", "idle", stopDetail("All done.")))
+	c := e.waitSends(t, 1)[0]
+	if !strings.Contains(c.Payload, `"body":"All done."`) || !strings.Contains(c.Payload, `"title":"mlab: dev"`) || strings.Contains(c.Payload, "workbook") {
+		t.Fatalf("payload = %s", c.Payload)
+	}
+}
+
 // The frame's BroadcastTs is wall-clock nanoseconds, the entry's turn_at milliseconds: the hold converts, and gives the
 // waiter the session id and a deadline push_wait_s ahead.
 // Mutation gate: pass the stamp unconverted → red.
