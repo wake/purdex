@@ -4,7 +4,7 @@
 // Body, newest first: the turns after the newest recap (decision 2 = B), then the recaps — the newest open, each one a time, its turn span and its trigger, the headline,
 // and open the fields 完成／目前／已定／等你／下一步 and that span's turn summaries.
 // Opening the view reads the recaps, and asks for one ("open") when the daemon can make one and turn summaries are waiting; a `dialogue.recap` event reloads (the store does).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowsClockwise, CaretDown, CaretLeft, CaretRight, ClockCounterClockwise } from '@phosphor-icons/react'
 import { selectDialogueEntry, summariesInRange, useDialogueStore } from '../../stores/useDialogueStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -27,7 +27,7 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
   const [notice, setNotice] = useState(false)
   const [afterOpen, setAfterOpen] = useState(true)
   const [expanded, setExpanded] = useState<Record<number, boolean>>({})
-  const baseline = useRef<number | null>(null)
+  const [baseline, setBaseline] = useState<number | null>(null)
 
   // Open: read the recaps, then ask for a new one when the daemon can make it and turn summaries are waiting.
   useEffect(() => {
@@ -52,7 +52,7 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
     void useDialogueStore.getState().loadSummariesAfter(hostId, sessionId, recaps.last_recap_to_no)
   }, [hostId, sessionId, recaps?.last_recap_to_no, recaps?.newest_turn_no]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (recaps !== null && baseline.current === null) baseline.current = recaps.recaps[0]?.id ?? 0
+  if (recaps !== null && baseline === null) setBaseline(recaps.recaps[0]?.id ?? 0)
   const pending = newest > lastTo ? summariesInRange(entry, lastTo + 1, Number.MAX_SAFE_INTEGER) : []
   const generating = entry?.generating === true
   const canGenerate = recaps?.can_generate === true
@@ -157,7 +157,7 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
             recap={r}
             open={expanded[r.id] ?? i === 0}
             onToggle={() => setExpanded((m) => ({ ...m, [r.id]: !(m[r.id] ?? i === 0) }))}
-            fresh={baseline.current !== null && r.id > baseline.current}
+            fresh={baseline !== null && r.id > baseline}
           />
         ))}
       </div>
