@@ -31,7 +31,8 @@ vi.mock('./components/TitleBar', () => ({
 }))
 vi.mock('./components/ActivityBar', () => ({ ActivityBar: (props: unknown) => { activityBarProps(props); return null } }))
 vi.mock('./components/TabBar', () => ({ TabBar: (props: unknown) => { tabBarProps(props); return <div data-testid="tab-bar" /> } }))
-vi.mock('./components/TabContent', () => ({ TabContent: () => null }))
+vi.mock('./components/TabContent', () => ({ TabContent: () => <div data-testid="tab-content" /> }))
+vi.mock('./components/team/TeamPanelArea', () => ({ TeamPanelArea: () => <div data-testid="team-panel-area-mount" /> }))
 vi.mock('./components/StatusBar', () => ({ StatusBar: () => null }))
 vi.mock('./components/TabContextMenu', () => ({ TabContextMenu: () => null }))
 vi.mock('./components/RenamePopover', () => ({ RenamePopover: () => null }))
@@ -110,6 +111,20 @@ describe('App — title bar', () => {
     setElectronApi(true)
     render(<App />)
     expect(screen.getByTestId('app-title-bar')).toBeInTheDocument()
+  })
+})
+
+// The team / personal panel area floats over the top-right of the content box (`absolute` in a `relative` parent): with no mount the panel's line
+// and full forms, and the recap history in them, are drawn nowhere and a click that brings the panel out of the title bar only empties the strip.
+describe('App — the panel area', () => {
+  afterEach(() => { visibleIdsOf.mockReturnValue([]) })
+
+  it('is mounted beside the tab content, in the content box it floats over', () => {
+    visibleIdsOf.mockReturnValue(['t1'])
+    render(<App />)
+    const area = screen.getByTestId('team-panel-area-mount')
+    expect(area.parentElement).toBe(screen.getByTestId('tab-content').parentElement)
+    expect(area.parentElement).toHaveClass('relative')
   })
 })
 
