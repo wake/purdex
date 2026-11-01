@@ -9,7 +9,6 @@ package dialogue
 import (
 	"context"
 	"log"
-	"net/http"
 	"path/filepath"
 	"sync"
 
@@ -87,9 +86,6 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	return nil
 }
-
-// RegisterRoutes: PR 1 has no HTTP API (the files are the interface); the core's Module interface wants the method.
-func (m *Module) RegisterRoutes(*http.ServeMux) {}
 
 // Status is what the daemon reports for the module.
 func (m *Module) Status() map[string]any {
