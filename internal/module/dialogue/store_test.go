@@ -116,14 +116,17 @@ func TestCommitKeepsExistingTurnNo(t *testing.T) {
 
 func TestResetForRebuildKeepsTurns(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.Commit("s1", SessionState{Segment: 1, NextTurnNo: 3}, []TurnRow{{TurnID: "a", TurnNo: 1}, {TurnID: "b", TurnNo: 2}}); err != nil {
+	if err := s.Commit("s1", SessionState{Segment: 3, SegBytes: 50, CursorTurn: "b", CursorItems: 2, CursorItemID: "i", NextTurnNo: 3, SourcePath: "/p"},
+		[]TurnRow{{TurnID: "a", TurnNo: 1}, {TurnID: "b", TurnNo: 2}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ResetForRebuild("s1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.Session("s1"); ok {
-		t.Fatal("session still present")
+	st, ok, _ := s.Session("s1")
+	want := SessionState{Segment: 1, NextTurnNo: 3, SourcePath: "/p", Rebuilding: true}
+	if !ok || st != want {
+		t.Fatalf("session after reset = %+v %v, want %+v", st, ok, want)
 	}
 	if n, ok, _ := s.TurnNo("s1", "b"); !ok || n != 2 {
 		t.Fatalf("TurnNo b = %d %v", n, ok)

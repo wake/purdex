@@ -25,6 +25,9 @@ type SessionState struct {
 	CursorItemID string
 	NextTurnNo   int
 	SourcePath   string
+	// Rebuilding: the files are being rewritten from the whole conversation and the rewrite has not finished. It stays
+	// set across a crash or an interrupted run, so the next Write keeps rebuilding (Placed blocks included).
+	Rebuilding bool
 }
 
 // TurnRow is one turn's allocated number and where it was written (dlg_turns).
@@ -72,12 +75,14 @@ func OpenStore(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// Session returns a session's state; false when it has none (never written, or reset for a rebuild).
+// Session returns a session's state; false when it has none (never written).
 func (s *Store) Session(sid string) (SessionState, bool, error) {
 	var st SessionState
-	err := s.db.QueryRow(`SELECT segment, seg_bytes, cursor_turn, cursor_items, cursor_item_id, next_turn_no, source_path
+	var rebuilding int
+	err := s.db.QueryRow(`SELECT segment, seg_bytes, cursor_turn, cursor_items, cursor_item_id, next_turn_no, source_path, rebuilding
 		FROM dlg_sessions WHERE session_id = ?`, sid).
-		Scan(&st.Segment, &st.SegBytes, &st.CursorTurn, &st.CursorItems, &st.CursorItemID, &st.NextTurnNo, &st.SourcePath)
+		Scan(&st.Segment, &st.SegBytes, &st.CursorTurn, &st.CursorItems, &st.CursorItemID, &st.NextTurnNo, &st.SourcePath, &rebuilding)
+	st.Rebuilding = rebuilding != 0
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionState{}, false, nil
 	}
@@ -98,12 +103,13 @@ func (s *Store) Commit(sid string, st SessionState, newTurns []TurnRow) error {
 	defer tx.Rollback()
 	now := s.now()
 	if _, err := tx.Exec(`INSERT INTO dlg_sessions
-		(session_id, segment, seg_bytes, cursor_turn, cursor_items, cursor_item_id, next_turn_no, source_path, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(session_id, segment, seg_bytes, cursor_turn, cursor_items, cursor_item_id, next_turn_no, source_path, rebuilding, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET segment = excluded.segment, seg_bytes = excluded.seg_bytes,
 			cursor_turn = excluded.cursor_turn, cursor_items = excluded.cursor_items, cursor_item_id = excluded.cursor_item_id,
-			next_turn_no = excluded.next_turn_no, source_path = excluded.source_path, updated_at = excluded.updated_at`,
-		sid, st.Segment, st.SegBytes, st.CursorTurn, st.CursorItems, st.CursorItemID, st.NextTurnNo, st.SourcePath, now, now); err != nil {
+			next_turn_no = excluded.next_turn_no, source_path = excluded.source_path, rebuilding = excluded.rebuilding,
+			updated_at = excluded.updated_at`,
+		sid, st.Segment, st.SegBytes, st.CursorTurn, st.CursorItems, st.CursorItemID, st.NextTurnNo, st.SourcePath, rebuildingInt(st.Rebuilding), now, now); err != nil {
 		return fmt.Errorf("commit dialogue session: %w", err)
 	}
 	if s.failAfterSession != nil {
@@ -155,11 +161,20 @@ func (s *Store) TurnNos(sid string) (map[string]int, error) {
 	return out, rows.Err()
 }
 
-// ResetForRebuild forgets a session's cursor and segment; its turn numbers stay.
+func rebuildingInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// ResetForRebuild forgets a session's cursor and segment position and marks it rebuilding; its turn numbers
+// (dlg_turns, next_turn_no) and source path stay. The row is kept, so a crash after the reset still knows to rebuild.
 func (s *Store) ResetForRebuild(sid string) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if _, err := s.db.Exec(`DELETE FROM dlg_sessions WHERE session_id = ?`, sid); err != nil {
+	if _, err := s.db.Exec(`UPDATE dlg_sessions SET segment = 1, seg_bytes = 0, cursor_turn = '', cursor_items = 0,
+		cursor_item_id = '', rebuilding = 1, updated_at = ? WHERE session_id = ?`, s.now(), sid); err != nil {
 		return fmt.Errorf("reset dialogue session: %w", err)
 	}
 	return nil
@@ -260,6 +275,7 @@ func migrateV1(tx stepExec) error {
 			cursor_item_id TEXT NOT NULL DEFAULT '',
 			next_turn_no INTEGER NOT NULL,
 			source_path TEXT NOT NULL DEFAULT '',
+			rebuilding INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL);
 		CREATE TABLE dlg_turns (
