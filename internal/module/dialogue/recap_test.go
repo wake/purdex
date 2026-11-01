@@ -149,6 +149,16 @@ func TestRecap_NoSecondOneWhileOneIsInFlight(t *testing.T) {
 	if _, ok := r.take(); ok {
 		t.Fatal("a second recap job was queued")
 	}
+	// the session holds one lease at a time, so take alone cannot see a second job waiting behind the first
+	r.ch.qmu.Lock()
+	waiting := 0
+	if q := r.ch.qs[sidS]; q != nil {
+		waiting = len(q.waiting)
+	}
+	r.ch.qmu.Unlock()
+	if waiting != 0 {
+		t.Fatalf("%d recap job(s) waiting behind the first", waiting)
+	}
 }
 
 // 5: the mod's answer lands in the file, resets the count and is announced once; the same answer again changes nothing.
@@ -268,6 +278,9 @@ func TestRecap_UnavailableFreesTheSlot(t *testing.T) {
 	r.setCapable(true)
 	if got := r.rc.request(sidS, "manual"); got != "queued" {
 		t.Fatalf("after becoming capable: %s", got)
+	}
+	if _, ok := r.take(); !ok { // "queued" alone would also be the answer of a slot never freed
+		t.Fatal("no recap job was queued after the session became capable")
 	}
 }
 
