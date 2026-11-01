@@ -15,6 +15,8 @@
 > - Reuse §4.1 補 `outcome.go`（第 9 條）。
 >
 > 修正都是針對單條 finding 的局部補充，不再送審。
+>
+> **修訂 2**（PR 1 合併前 codex 攻擊方，11-01）：§1-9 每個 Stop 只寫到自己的回合；§1-10 不再修改前任檔案；新增 §1-13 session id 驗證。
 
 ## 0. 範圍與 PR
 
@@ -49,8 +51,12 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
    - spec §2.3 原寫「convfeed 開新 epoch 時重建」，寫 plan 時改成上面兩個條件（spec 已同步）：Turn.ID 取自回合第一列的 uuid（`ccnorm/turns.go:30-48` `openTurn`），epoch 換了 id 照樣找得到，就不必重建；真的找不到才重建。
 7. **每個 session 一條工作 goroutine，事件不合併**。訂閱者只把事件放進該 session 的佇列（上限 16，同工作簿 `maxQueued`，`intake.go:43`；滿了丟掉新的並記錄），worker 依到達順序**逐個**處理，處理完閒置一段時間自行結束。不合併的原因：PR 2 的推播配對要用每個 Stop 自己的 (At, Seq)，而且每個事件處理完都要各自通知推播等待（工作簿 `intake.go:58-66`、`lines.go:49-83`）。等 transcript 跟上的重試（100 ms × 15）在 worker 內做，不卡住訂閱者。
 8. **等 transcript 跟上**沿用工作簿 `adoptEvent` 的判斷，但不把 hook 的文字塞進回合。原因：塞進去的假 item 會讓「已寫 item 數」對不上，真文字晚到時會重複寫。逾時就照檔案現況寫，晚到的部分下次從游標補上。回合摘要（PR 2）要用 hook 文字當備援時，另外傳給 job。
-9. **只寫已結束的回合**：遇到第一個仍在跑的回合就停；事件指到的那一回合即使還顯示 running，也當成已結束。
-10. **接力的前後段互指**：新 session 開第一段時，`<prev:>` 指向前任（`team.PredecessorReader`）的最後一段；前任的最後一段若在資料庫裡，補寫一行 `<next: …>` 指回來。前任沒記錄過就寫 `<prev: none>`。
+9. **只寫已結束的回合，而且每個 Stop 只寫到它自己的回合**：
+   - 遇到第一個仍在跑的回合就停；事件指到的那一回合即使還顯示 running，也當成已結束；
+   - 找得到事件指到的回合時，寫到它（含）就停，之後的回合留給它們自己的 Stop（PR 1 合併前審查加的：否則前一個 Stop 會把後面的回合一起寫掉，PR 2 的推播配對就配不到）；找不到時才一路寫到不能寫為止；
+   - 游標回合的晚到 item 照樣補寫。
+10. **接力**：新 session 開第一段時，`<prev:>` 指向前任（`team.PredecessorReader`）的最後一段；前任沒記錄過就寫 `<prev: none>`。**不修改前任的檔案**（原本要在前任最後一段補 `<next:>`，PR 1 合併前審查發現前任之後若再寫入會讓連結錯位、補寫與記錄之間失敗會讓連結被當成當機殘留截掉，拿掉；往前追溯靠 `<prev:>` 就夠）。
+13. **session id 先驗證再進路徑**：只接受小寫 UUID（同 `internal/modevents/wire.go:131` `sidRe`），intake 入口與 writer 各驗一次，段檔路徑清理後必須仍在 `<data_dir>/dialogue` 底下；前任 id 也驗。（PR 1 合併前審查：hook 送來的 session id 沒驗證，`../` 能跳出資料夾。）
 11. **路徑一律寫絕對路徑**，方便之後 agent 直接用 Read 打開（spec 範例裡的 `~` 只是示意）。
 12. **涵蓋範圍**跟工作簿一樣，只有走 tmux hook 的 Claude Code session：turn-end hub 只發這些（`internal/module/agent/turn_end_hub.go:38-41`）。
 
