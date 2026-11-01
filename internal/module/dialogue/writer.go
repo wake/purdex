@@ -26,8 +26,10 @@ var errNeedAll = errors.New("dialogue: rebuild needs the whole conversation")
 
 // Hooks are the seams PR 2 fills (turn summaries and recaps); PR 1 passes the zero value.
 type Hooks struct {
-	// Carried is the last recap's full text, marker line included, written into a new segment's header. "" for none.
-	Carried func(sid string) string
+	// Carried returns the full text, marker line included, of the newest recap of session sid whose to_no is not greater
+	// than beforeNo, to be written into a new segment's header; "" for none. beforeNo is the number of the turn in which
+	// the compaction boundary happens. PR 2 implements it.
+	Carried func(sid string, beforeNo int) string
 	// Placed returns blocks to put right after a turn when a session is rebuilt (its turn summary, a recap).
 	Placed func(sid, turnID string) []string
 }
@@ -41,10 +43,12 @@ type WrittenTurn struct {
 
 // WriteResult is what one Write did.
 type WriteResult struct {
-	First       bool          // the session had no state and this was not a rebuild
-	Rebuilt     bool          // the files were deleted and rewritten from the whole conversation
-	Turns       []WrittenTurn // turns that had no number before (not the cursor turn's second half; not a rebuild's turns)
-	WaitingTool bool          // stopped at a turn that still has a running tool (not force); try again later
+	First   bool // the session had no state: Turns holds every historical turn, and the caller (PR 2) decides to take only the event's turn and later ones
+	Rebuilt bool // the files were (re)written from the whole conversation; says nothing about Turns
+	// Turns are the turns that got their number in this call, in turn order (so also in a rebuild, if the conversation
+	// grew); not the cursor turn's second half, and not turns that had a number already.
+	Turns       []WrittenTurn
+	WaitingTool bool // stopped at a turn that still has a running tool (not force); try again later
 }
 
 // Writer writes dialogue files under root: <root>/<session id>/001.md, 002.md, …
@@ -56,13 +60,24 @@ type Writer struct {
 	store  *Store
 	prevOf func(sid string) (string, bool) // the session this one continues, if any (a handoff)
 	hooks  Hooks
+	logf   func(format string, args ...any) // nil: no logging
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
 }
 
-func NewWriter(root string, store *Store, prevOf func(sid string) (string, bool), hooks Hooks) *Writer {
-	return &Writer{root: root, store: store, prevOf: prevOf, hooks: hooks, locks: map[string]*sync.Mutex{}}
+// Option configures a Writer.
+type Option func(*Writer)
+
+// WithLogf sets where the writer reports things it skipped (a previous segment it could not link). nil: silent.
+func WithLogf(f func(format string, args ...any)) Option { return func(w *Writer) { w.logf = f } }
+
+func NewWriter(root string, store *Store, prevOf func(sid string) (string, bool), hooks Hooks, opts ...Option) *Writer {
+	w := &Writer{root: root, store: store, prevOf: prevOf, hooks: hooks, locks: map[string]*sync.Mutex{}}
+	for _, o := range opts {
+		o(w)
+	}
+	return w
 }
 
 func (w *Writer) lockFor(sid string) *sync.Mutex {
@@ -83,7 +98,11 @@ func (w *Writer) segPath(sid string, n int) string { return filepath.Join(w.root
 // Write records the turns of res into sid's dialogue files. res is TurnsFrom(sid, cursor turn): when the cursor turn is
 // found, res.Turns[0] is that turn and res.Found is true; otherwise res.Turns is the whole conversation.
 // target is the turn id the stop event is about: it may be written while still running.
-// force writes a turn even when a tool in it is still running.
+// force writes a turn even when a tool in it is still running. That is a trade-off (plan §1-3): once written, a late
+// in-place update of the turn (an AskUserQuestion answer arriving) is not written again.
+//
+// There is no fsync: after a power loss a segment file can be shorter than its seg_bytes; the next Write then
+// rebuilds the whole session.
 func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string, force bool) (WriteResult, error) {
 	l := w.lockFor(sid)
 	l.Lock()
@@ -97,7 +116,7 @@ func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string,
 		if res.Found {
 			return WriteResult{}, errNeedAll
 		}
-		return w.run(sid, res, target, force, nil, false, 0)
+		return w.run(sid, res, target, force, nil)
 	}
 
 	rebuild, err := w.needsRebuild(sid, st, res)
@@ -111,6 +130,16 @@ func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string,
 		return w.rebuild(sid, st, res, target, force)
 	}
 
+	// A rebuild that was reset but not started (or whose start crashed): nothing of the old files may stay.
+	if st.Rebuilding && st.Segment == 1 && st.SegBytes == 0 && st.CursorTurn == "" {
+		if res.Found {
+			return WriteResult{}, errNeedAll
+		}
+		if err := w.removeSegments(sid); err != nil {
+			return WriteResult{}, err
+		}
+	}
+
 	// A file longer than recorded holds bytes written but never committed (a crash): cut them off.
 	if st.SegBytes > 0 {
 		if fi, err := os.Stat(w.segPath(sid, st.Segment)); err == nil && fi.Size() > st.SegBytes {
@@ -119,7 +148,18 @@ func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string,
 			}
 		}
 	}
-	return w.run(sid, res, target, force, &st, false, 0)
+	// st.Rebuilding: an earlier rebuild did not reach the end; this call carries on as a rebuild.
+	return w.run(sid, res, target, force, &st)
+}
+
+func (w *Writer) removeSegments(sid string) error {
+	matches, _ := filepath.Glob(filepath.Join(w.root, sid, "*.md"))
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove dialogue segment: %w", err)
+		}
+	}
+	return nil
 }
 
 // needsRebuild says whether the files and cursor can no longer be trusted. It reads, never writes.
@@ -153,60 +193,74 @@ func (w *Writer) needsRebuild(sid string, st SessionState, res convturns.TurnsFr
 }
 
 func (w *Writer) rebuild(sid string, old SessionState, res convturns.TurnsFromResult, target string, force bool) (WriteResult, error) {
+	// Reset first (this sets the flag, so a crash from here on is still a rebuild), then the files, then the rewrite.
 	if err := w.store.ResetForRebuild(sid); err != nil {
 		return WriteResult{}, err
 	}
-	matches, _ := filepath.Glob(filepath.Join(w.root, sid, "*.md"))
-	for _, m := range matches {
-		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
-			return WriteResult{}, fmt.Errorf("remove dialogue segment: %w", err)
-		}
+	if err := w.removeSegments(sid); err != nil {
+		return WriteResult{}, err
 	}
-	return w.run(sid, res, target, force, nil, true, old.NextTurnNo)
+	fresh := SessionState{Segment: 1, NextTurnNo: old.NextTurnNo, SourcePath: old.SourcePath, Rebuilding: true}
+	return w.run(sid, res, target, force, &fresh)
 }
 
-// run writes res.Turns from the cursor (st) or from the start (st nil).
-func (w *Writer) run(sid string, res convturns.TurnsFromResult, target string, force bool, st *SessionState, rebuilt bool, floorNext int) (WriteResult, error) {
+// run writes res.Turns from the cursor (st) or from the start (st nil). A state with Rebuilding set writes in rebuild
+// mode: Placed blocks are put, and the flag is cleared once res.Turns has been written to the end.
+func (w *Writer) run(sid string, res convturns.TurnsFromResult, target string, force bool, st *SessionState) (WriteResult, error) {
 	nos, err := w.store.TurnNos(sid)
 	if err != nil {
 		return WriteResult{}, err
 	}
-	r := &runner{w: w, sid: sid, source: res.Path, rebuilt: rebuilt, nos: nos, nextNo: 1, seg: 1}
+	r := &runner{w: w, sid: sid, source: res.Path, nos: nos, nextNo: 1, seg: 1}
 	maxNo := 0
 	for _, n := range nos {
 		if n > maxNo {
 			maxNo = n
 		}
 	}
-	r.nextNo = max(maxNo+1, floorNext)
+	r.nextNo = maxNo + 1
 	if st != nil {
 		r.seg, r.size, r.nextNo = st.Segment, st.SegBytes, st.NextTurnNo
 		r.cursorTurn, r.cursorItems, r.cursorItemID = st.CursorTurn, st.CursorItems, st.CursorItemID
+		r.rebuilt = st.Rebuilding
+		r.rebuilding = st.Rebuilding
 	}
-	out := WriteResult{First: st == nil && !rebuilt, Rebuilt: rebuilt}
+	out := WriteResult{First: st == nil, Rebuilt: r.rebuilt}
 
+	complete := true
 	for i, t := range res.Turns {
 		from := 0
 		if st != nil && res.Found && i == 0 {
 			from = st.CursorItems
 		}
 		if t.Outcome == convmodel.OutcomeRunning && t.ID != target {
+			complete = false
 			break
 		}
 		items := t.Items[from:]
 		if len(items) == 0 {
 			continue
 		}
-		if !force && hasRunningStep(items) {
+		// A tool still running in an older, finished turn is an orphan (its result never came) and holds nothing back;
+		// only the turn the event is about and the newest turn can still be waiting for a result.
+		if !force && (t.ID == target || i == len(res.Turns)-1) && hasRunningStep(items) {
 			out.WaitingTool = true
+			complete = false
 			break
 		}
 		wt, isNew, err := r.writeTurn(t, items)
 		if err != nil {
 			return out, err
 		}
-		if isNew && !rebuilt {
+		if isNew {
 			out.Turns = append(out.Turns, wt)
+		}
+	}
+	if complete && r.rebuilding {
+		// the whole conversation is in the files: the rebuild is over
+		r.rebuilding = false
+		if err := r.w.store.Commit(sid, r.state(), nil); err != nil {
+			return out, err
 		}
 	}
 	return out, nil
@@ -226,9 +280,12 @@ type runner struct {
 	w       *Writer
 	sid     string
 	source  string
-	rebuilt bool
-	nos     map[string]int
-	nextNo  int
+	rebuilt bool // this run writes in rebuild mode (Placed blocks; no <next:> linking)
+	// rebuilding is what the committed state says; it turns false with the commit that ends the rebuild.
+	rebuilding bool
+	nos        map[string]int
+	nextNo     int
+	curNo      int // number of the turn being written
 
 	seg  int
 	size int64 // bytes of the current segment file; 0 means its header is not written yet
@@ -236,6 +293,13 @@ type runner struct {
 	cursorTurn   string
 	cursorItems  int
 	cursorItemID string
+}
+
+func (r *runner) state() SessionState {
+	return SessionState{
+		Segment: r.seg, SegBytes: r.size, CursorTurn: r.cursorTurn, CursorItems: r.cursorItems,
+		CursorItemID: r.cursorItemID, NextTurnNo: r.nextNo, SourcePath: r.source, Rebuilding: r.rebuilding,
+	}
 }
 
 func (r *runner) append(s string) error {
@@ -271,20 +335,15 @@ func (r *runner) ensureHeader() error {
 	prev := "none"
 	if r.seg > 1 {
 		prev = r.w.segPath(r.sid, r.seg-1)
-	} else if p, ok, err := r.w.prevSegment(r.sid); err != nil {
+	} else if p, ok, err := r.w.linkPrev(r.sid, r.w.segPath(r.sid, 1), !r.rebuilt); err != nil {
 		return err
 	} else if ok {
 		prev = p
-		if !r.rebuilt {
-			if err := r.w.linkNext(p, r.w.segPath(r.sid, 1)); err != nil {
-				return err
-			}
-		}
 	}
 	var sb strings.Builder
 	sb.WriteString("<prev: " + prev + ">\n<source: " + r.source + ">\n")
 	if r.seg > 1 && r.w.hooks.Carried != nil {
-		if c := r.w.hooks.Carried(r.sid); c != "" {
+		if c := r.w.hooks.Carried(r.sid, r.curNo); c != "" {
 			sb.WriteString(c)
 			if !strings.HasSuffix(c, "\n") {
 				sb.WriteByte('\n')
@@ -332,6 +391,7 @@ func (r *runner) writeTurn(t convmodel.Turn, items []convmodel.Item) (WrittenTur
 		r.nextNo++
 		r.nos[t.ID] = no
 	}
+	r.curNo = no
 	startSeg := r.seg
 	for _, b := range renderItems(items) {
 		var err error
@@ -360,47 +420,60 @@ func (r *runner) writeTurn(t convmodel.Turn, items []convmodel.Item) (WrittenTur
 	}
 	r.cursorTurn, r.cursorItems, r.cursorItemID = t.ID, len(t.Items), itemID(t.Items[len(t.Items)-1])
 	// the file is written first; only then is it recorded
-	err := r.w.store.Commit(r.sid, SessionState{
-		Segment: r.seg, SegBytes: r.size, CursorTurn: r.cursorTurn, CursorItems: r.cursorItems,
-		CursorItemID: r.cursorItemID, NextTurnNo: r.nextNo, SourcePath: r.source,
-	}, []TurnRow{{TurnID: t.ID, TurnNo: no, Segment: startSeg, EndedAt: ended}})
+	err := r.w.store.Commit(r.sid, r.state(), []TurnRow{{TurnID: t.ID, TurnNo: no, Segment: startSeg, EndedAt: ended}})
 	if err != nil {
 		return WrittenTurn{}, false, err
 	}
 	return WrittenTurn{ID: t.ID, No: no, EndedAt: ended}, !known, nil
 }
 
-// prevSegment is the path of the last segment of the session sid continues, when that session has been recorded.
-func (w *Writer) prevSegment(sid string) (string, bool, error) {
+func (w *Writer) log(format string, args ...any) {
+	if w.logf != nil {
+		w.logf(format, args...)
+	}
+}
+
+// linkPrev finds the last segment of the session sid continues (a handoff) and, when link is set, appends
+// "<next: next>" to it. ok is false when there is no previous session or it has not been recorded. The path and the
+// state it is judged by are both read under the previous session's lock, so they are the same snapshot.
+//
+// Taking the previous session's lock while holding sid's is safe: lineage is a chain that never closes on itself
+// (a session continues only an earlier one; prevOf == sid is refused), so no two writers wait on each other.
+func (w *Writer) linkPrev(sid, next string, link bool) (path string, ok bool, err error) {
 	if w.prevOf == nil {
 		return "", false, nil
 	}
-	p, ok := w.prevOf(sid)
-	if !ok || p == "" || p == sid {
+	prevSid, has := w.prevOf(sid)
+	if !has || prevSid == "" || prevSid == sid {
 		return "", false, nil
 	}
-	st, has, err := w.store.Session(p)
-	if err != nil || !has {
-		return "", false, err
-	}
-	return w.segPath(p, st.Segment), true, nil
-}
-
-// linkNext appends "<next: …>" to the previous session's last segment and records the new size, so that session's own
-// next write does not take the line for crash residue. Idempotent: a line already there is not repeated.
-func (w *Writer) linkNext(prevPath, next string) error {
-	prevSid := filepath.Base(filepath.Dir(prevPath))
 	l := w.lockFor(prevSid)
 	l.Lock()
 	defer l.Unlock()
 	st, has, err := w.store.Session(prevSid)
-	if err != nil || !has {
-		return err
+	if err != nil {
+		return "", false, err
 	}
+	if !has {
+		w.log("dialogue: %s continues %s, which has no dialogue state yet; not linked", sid, prevSid)
+		return "", false, nil
+	}
+	path = w.segPath(prevSid, st.Segment)
+	if !link {
+		return path, true, nil
+	}
+	return path, true, w.appendNext(prevSid, path, st, next)
+}
+
+// appendNext adds "<next: …>" to the previous session's last segment and records the new size, so that session's own
+// next write does not take the line for crash residue. Idempotent: a line already there is not repeated. The caller
+// holds prevSid's lock.
+func (w *Writer) appendNext(prevSid, prevPath string, st SessionState, next string) error {
 	line := "<next: " + next + ">\n"
 	b, err := os.ReadFile(prevPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			w.log("dialogue: %s is gone; its <next:> line was not added", prevPath)
 			return nil
 		}
 		return fmt.Errorf("read previous dialogue segment: %w", err)
@@ -409,7 +482,9 @@ func (w *Writer) linkNext(prevPath, next string) error {
 		return nil
 	}
 	if int64(len(b)) != st.SegBytes {
-		return nil // the previous file is not in a state we can extend safely; it will repair itself on its next write
+		// the previous file is not in a state we can extend safely; it will repair itself on its next write
+		w.log("dialogue: %s is %d bytes but its state says %d; its <next:> line was not added", prevPath, len(b), st.SegBytes)
+		return nil
 	}
 	f, err := os.OpenFile(prevPath, os.O_APPEND|os.O_WRONLY, fileMode)
 	if err != nil {

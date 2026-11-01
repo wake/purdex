@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,7 @@ type env struct {
 	store *Store
 	w     *Writer
 	prevs map[string]string
+	logs  []string
 }
 
 func newEnv(t *testing.T, hooks Hooks) *env {
@@ -66,7 +68,8 @@ func newEnv(t *testing.T, hooks Hooks) *env {
 	}
 	t.Cleanup(func() { st.Close() })
 	e := &env{t: t, root: filepath.Join(dir, "dialogue"), store: st, prevs: map[string]string{}}
-	e.w = NewWriter(e.root, st, func(sid string) (string, bool) { p, ok := e.prevs[sid]; return p, ok }, hooks)
+	e.w = NewWriter(e.root, st, func(sid string) (string, bool) { p, ok := e.prevs[sid]; return p, ok }, hooks,
+		WithLogf(func(f string, a ...any) { e.logs = append(e.logs, fmt.Sprintf(f, a...)) }))
 	return e
 }
 
@@ -257,7 +260,7 @@ func TestWriterRebuild(t *testing.T) {
 			t.Errorf("result = %+v", r)
 		}
 		if len(r.Turns) != 0 {
-			t.Errorf("a rebuild reports no new turns: %+v", r.Turns)
+			t.Errorf("these turns all had numbers already, so none is reported: %+v", r.Turns)
 		}
 		if e.read("s", 1) != c1 || e.read("s", 2) != c2 {
 			t.Error("rebuilt content differs")
@@ -507,7 +510,12 @@ func TestWriterPlacedHookOnRebuild(t *testing.T) {
 }
 
 func TestWriterCarriedRecapOnNewSegment(t *testing.T) {
-	e := newEnv(t, Hooks{Carried: func(sid string) string { return "<carried recap 05:44 | turns 1–1>\nheadline: x\n" }})
+	var gotSid string
+	gotBefore := -1
+	e := newEnv(t, Hooks{Carried: func(sid string, beforeNo int) string {
+		gotSid, gotBefore = sid, beforeNo
+		return "<carried recap 05:44 | turns 1–1>\nheadline: x\n"
+	}})
 	turns := []convmodel.Turn{done("t1", userItem("u1", "a"), compactItem("c", "auto")), done("t2", userItem("u2", "b"))}
 	e.write("s", all(turns), "", false)
 	if got := e.read("s", 1); strings.Contains(got, "carried") {
@@ -516,5 +524,201 @@ func TestWriterCarriedRecapOnNewSegment(t *testing.T) {
 	want := "<prev: " + e.seg("s", 1) + ">\n<source: " + testSource + ">\n<carried recap 05:44 | turns 1–1>\nheadline: x\n\nuser: b\n"
 	if got := e.read("s", 2); got != want {
 		t.Errorf("002 = %q\nwant %q", got, want)
+	}
+	if gotSid != "s" || gotBefore != 1 {
+		t.Errorf("Carried(%q, %d), want (s, 1): the boundary is in turn 1", gotSid, gotBefore)
+	}
+}
+
+// the rebuild also reports a turn that gets its number now, and numbers it after the highest one
+func TestWriterRebuildReportsNewTurn(t *testing.T) {
+	e := newEnv(t, Hooks{})
+	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two"))}
+	e.write("s", all(turns), "", false)
+	turns = append(turns, done("t3", userItem("u3", "three")))
+	r := e.write("s", all(turns), "", false) // Found=false with a cursor: rebuild
+	if !r.Rebuilt || r.First {
+		t.Fatalf("result = %+v", r)
+	}
+	if len(r.Turns) != 1 || r.Turns[0].ID != "t3" || r.Turns[0].No != 3 {
+		t.Fatalf("Turns = %+v, want only t3 as no. 3", r.Turns)
+	}
+}
+
+// a crash between the reset and the rewrite still rebuilds, and Placed blocks are put
+func TestWriterRebuildSurvivesCrashAfterReset(t *testing.T) {
+	placed := 0
+	e := newEnv(t, Hooks{Placed: func(sid, turnID string) []string {
+		placed++
+		return []string{"<turn-summary " + turnID + ">"}
+	}})
+	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two"))}
+	e.write("s", all(turns), "", false)
+	if placed != 0 {
+		t.Fatal("Placed is only for rebuilds")
+	}
+	if err := e.store.ResetForRebuild("s"); err != nil { // the daemon dies right here
+		t.Fatal(err)
+	}
+	r := e.write("s", all(turns), "", false)
+	if !r.Rebuilt || placed != 2 {
+		t.Fatalf("result = %+v, placed = %d", r, placed)
+	}
+	got := e.read("s", 1)
+	if strings.Count(got, "user: one") != 1 || !strings.Contains(got, "<turn-summary t2>") {
+		t.Errorf("file = %q", got)
+	}
+	if st, _, _ := e.store.Session("s"); st.Rebuilding {
+		t.Error("finished rebuild left the flag set")
+	}
+}
+
+// a rebuild cut short keeps the flag; the next Write continues as a rebuild and clears it at the end
+func TestWriterInterruptedRebuildResumes(t *testing.T) {
+	e := newEnv(t, Hooks{Placed: func(sid, turnID string) []string { return []string{"<turn-summary " + turnID + ">"} }})
+	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two")), done("t3", userItem("u3", "three"))}
+	e.write("s", all(turns), "", false)
+	cut := []convmodel.Turn{done("t1", userItem("u1", "one")), turn("t2", convmodel.OutcomeRunning, userItem("u2", "two")), turns[2]}
+	r := e.write("s", all(cut), "other", false) // rebuild; stops at the running t2
+	if !r.Rebuilt {
+		t.Fatalf("result = %+v", r)
+	}
+	if st, _, _ := e.store.Session("s"); !st.Rebuilding || st.CursorTurn != "t1" {
+		t.Fatalf("state after the cut = %+v", st)
+	}
+	r = e.write("s", fromRes(turns, e.cursorOf("s")), "", false)
+	if !r.Rebuilt {
+		t.Errorf("resumed write = %+v, want Rebuilt", r)
+	}
+	got := e.read("s", 1)
+	for _, id := range []string{"t1", "t2", "t3"} {
+		if strings.Count(got, "<turn-summary "+id+">") != 1 {
+			t.Errorf("summary of %s not exactly once: %q", id, got)
+		}
+	}
+	if st, _, _ := e.store.Session("s"); st.Rebuilding {
+		t.Error("flag still set after the whole conversation was written")
+	}
+}
+
+// a tool left running in an old turn (its result never came) does not hold back the turns after it
+func TestWriterOrphanRunningToolInHistory(t *testing.T) {
+	t.Run("history is written", func(t *testing.T) {
+		e := newEnv(t, Hooks{})
+		turns := []convmodel.Turn{
+			done("t1", userItem("u1", "one"), stepItem("x", "Bash", "ls", convmodel.StepRunning)),
+			done("t2", userItem("u2", "two"), agentItem("a2", "ok")),
+		}
+		r := e.write("s", all(turns), "", false)
+		if r.WaitingTool || len(r.Turns) != 2 {
+			t.Fatalf("result = %+v", r)
+		}
+		if got := e.read("s", 1); !strings.Contains(got, "user: two") {
+			t.Errorf("file = %q", got)
+		}
+	})
+	t.Run("the last turn still waits", func(t *testing.T) {
+		e := newEnv(t, Hooks{})
+		turns := []convmodel.Turn{
+			done("t1", userItem("u1", "one"), stepItem("x", "Bash", "ls", convmodel.StepRunning)),
+			done("t2", userItem("u2", "two"), stepItem("y", "Bash", "pwd", convmodel.StepRunning)),
+		}
+		r := e.write("s", all(turns), "", false)
+		if !r.WaitingTool || len(r.Turns) != 1 || r.Turns[0].ID != "t1" {
+			t.Fatalf("result = %+v", r)
+		}
+	})
+}
+
+// a Commit that fails after the file was written leaves residue the next Write cuts back
+func TestWriterCommitFailureThenRetry(t *testing.T) {
+	mk := func() []convmodel.Turn {
+		return []convmodel.Turn{done("t1", userItem("u1", "hi"), agentItem("a1", "hello")), done("t2", userItem("u2", "two"), agentItem("a2", "ok"))}
+	}
+	control := newEnv(t, Hooks{})
+	control.write("s", all(mk()[:1]), "", false)
+	wantRes := control.write("s", fromRes(mk(), control.cursorOf("s")), "", false)
+
+	e := newEnv(t, Hooks{})
+	e.write("s", all(mk()[:1]), "", false)
+	e.store.failAfterSession = func() error { return errors.New("boom") }
+	if _, err := e.w.Write("s", fromRes(mk(), e.cursorOf("s")), "", false); err == nil {
+		t.Fatal("Write should return the Commit error")
+	}
+	e.store.failAfterSession = nil
+	r := e.write("s", fromRes(mk(), e.cursorOf("s")), "", false)
+	if got, want := e.read("s", 1), control.read("s", 1); got != want {
+		t.Errorf("file = %q, want %q", got, want)
+	}
+	if len(r.Turns) != len(wantRes.Turns) || r.Turns[0].No != wantRes.Turns[0].No {
+		t.Errorf("result = %+v, want %+v", r, wantRes)
+	}
+}
+
+// a crash in the middle of a segment change leaves the old segment closed and the new one half-made, with the state
+// still before the change: the next Write cuts 001 back and changes segment again
+func TestWriterCrashDuringSegmentChange(t *testing.T) {
+	t1 := done("t1", userItem("u1", "hi"), agentItem("a1", "hello"))
+	t2 := done("t2", userItem("u2", "two"), compactItem("c", "auto"), userItem("u3", "after"))
+	control := newEnv(t, Hooks{})
+	control.write("s", all([]convmodel.Turn{t1}), "", false)
+	control.write("s", fromRes([]convmodel.Turn{t1, t2}, control.cursorOf("s")), "", false)
+
+	e := newEnv(t, Hooks{})
+	e.write("s", all([]convmodel.Turn{t1}), "", false)
+	f, err := os.OpenFile(e.seg("s", 1), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("\nuser: two\n\n<compacted | auto>\n<next: " + e.seg("s", 2) + ">\n")
+	f.Close()
+	if err := os.WriteFile(e.seg("s", 2), []byte("<prev: x>\n<source: y>\n\nuser: incomp"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := e.write("s", fromRes([]convmodel.Turn{t1, t2}, e.cursorOf("s")), "", false)
+	if r.Rebuilt {
+		t.Error("repaired by truncating, not rebuilt")
+	}
+	for n := 1; n <= 2; n++ {
+		got := strings.ReplaceAll(e.read("s", n), e.root, "ROOT")
+		if want := strings.ReplaceAll(control.read("s", n), control.root, "ROOT"); got != want {
+			t.Errorf("%03d = %q, want %q", n, got, want)
+		}
+	}
+}
+
+// Found=true with no state cannot be served: ask for the whole conversation, touch nothing
+func TestWriterFoundWithoutStateNeedsAll(t *testing.T) {
+	e := newEnv(t, Hooks{})
+	turns := []convmodel.Turn{done("t1", userItem("u1", "hi"))}
+	res := convturns.TurnsFromResult{Turns: turns, Found: true, Path: testSource}
+	if _, err := e.w.Write("s", res, "", false); !errors.Is(err, errNeedAll) {
+		t.Fatalf("err = %v, want errNeedAll", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, "s")); !os.IsNotExist(err) {
+		t.Error("a file or dir was created")
+	}
+	if _, ok, _ := e.store.Session("s"); ok {
+		t.Error("the store was written")
+	}
+}
+
+// a previous segment that cannot be extended is skipped, and the skip is logged
+func TestWriterLinkNextSkipIsLogged(t *testing.T) {
+	e := newEnv(t, Hooks{})
+	e.write("A", all([]convmodel.Turn{done("a1", userItem("u1", "in A"))}), "", false)
+	f, err := os.OpenFile(e.seg("A", 1), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("\nresidue")
+	f.Close()
+	e.prevs["B"] = "A"
+	e.write("B", all([]convmodel.Turn{done("b1", userItem("u2", "in B"))}), "", false)
+	if strings.Contains(e.read("A", 1), "<next:") {
+		t.Error("A was extended despite its length not matching the state")
+	}
+	if len(e.logs) == 0 || !strings.Contains(e.logs[0], "A") {
+		t.Errorf("logs = %q", e.logs)
 	}
 }
