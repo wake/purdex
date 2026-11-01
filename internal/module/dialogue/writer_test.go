@@ -573,6 +573,33 @@ func TestWriterRebuildSurvivesCrashAfterReset(t *testing.T) {
 	}
 }
 
+// a reset that died before the old files were removed: the rebuild removes them, so a segment the new layout no longer
+// has does not stay behind
+func TestWriterRebuildAfterResetRemovesStaleSegments(t *testing.T) {
+	e := newEnv(t, Hooks{})
+	turns := []convmodel.Turn{
+		done("t1", userItem("u1", "one"), compactItem("c1", "auto")),
+		done("t2", userItem("u2", "two"), compactItem("c2", "auto")),
+		done("t3", userItem("u3", "three")),
+	}
+	e.write("s", all(turns), "", false)
+	if _, err := os.Stat(e.seg("s", 3)); err != nil {
+		t.Fatalf("setup: no third segment: %v", err)
+	}
+	if err := e.store.ResetForRebuild("s"); err != nil { // the daemon dies before the files go
+		t.Fatal(err)
+	}
+	rewritten := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two")), done("t3", userItem("u3", "three"))}
+	if r := e.write("s", all(rewritten), "", false); !r.Rebuilt {
+		t.Fatalf("result = %+v", r)
+	}
+	for _, n := range []int{2, 3} {
+		if _, err := os.Stat(e.seg("s", n)); !os.IsNotExist(err) {
+			t.Errorf("segment %d stayed behind (err %v)", n, err)
+		}
+	}
+}
+
 // a rebuild cut short keeps the flag; the next Write continues as a rebuild and clears it at the end
 func TestWriterInterruptedRebuildResumes(t *testing.T) {
 	e := newEnv(t, Hooks{Placed: func(sid, turnID string) []string { return []string{"<turn-summary " + turnID + ">"} }})
