@@ -40,12 +40,19 @@ type jcKind struct {
 	mu       sync.Mutex
 	finishes []jcFinish
 	applies  []string
-	applyErr []error // consumed one per apply call; empty: nil
+	applyErr []error // consumed one per apply call; empty: applyAll (nil when unset)
+	applyAll error   // returned by every apply once applyErr is used up
 	buildErr error
 	onApply  func()
+	onBuild  func() // called before build returns (not under mu)
+	afters   []job
+	usages   []usage
 }
 
 func (k *jcKind) build(j job) (callInput, error) {
+	if k.onBuild != nil {
+		k.onBuild()
+	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.buildErr != nil {
@@ -54,15 +61,24 @@ func (k *jcKind) build(j job) (callInput, error) {
 	return callInput{System: "sys-" + j.kind, Prompt: fmt.Sprintf("prompt %v", j.payload)}, nil
 }
 
-func (k *jcKind) apply(j job, text string, _ usage) error {
+func (k *jcKind) after(j job) {
+	k.mu.Lock()
+	k.afters = append(k.afters, j)
+	k.mu.Unlock()
+}
+
+func (k *jcKind) afterCount() int { k.mu.Lock(); defer k.mu.Unlock(); return len(k.afters) }
+
+func (k *jcKind) apply(j job, text string, u usage) error {
 	if k.onApply != nil {
 		k.onApply()
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.applies = append(k.applies, fmt.Sprintf("%s:%v:%d:%s", j.kind, j.payload, j.attempt, text))
+	k.usages = append(k.usages, u)
 	if len(k.applyErr) == 0 {
-		return nil
+		return k.applyAll
 	}
 	err := k.applyErr[0]
 	k.applyErr = k.applyErr[1:]
@@ -281,12 +297,16 @@ func TestResult_ApplyFailureIsRetriedByTheReaper(t *testing.T) {
 	if _, ok := r.next(jcSID); !ok {
 		t.Fatal("the queue stalled behind the unstored answer")
 	}
-	// Next reaps first: that was the retry that failed again (2 applies so far); the next reap is the one that is taken.
-	if len(r.kind.applies) != 2 || r.kind.count() != 0 {
-		t.Fatalf("after the first retry: applies %v finishes %v", r.kind.applies, r.kind.finishes)
+	// Next does not retry (only the reaper does): the first apply is the only one so far.
+	if len(r.kind.applies) != 1 || r.kind.count() != 0 {
+		t.Fatalf("after Next: applies %v finishes %v", r.kind.applies, r.kind.finishes)
 	}
+	r.ch.reap() // fails again
 	r.ch.reap() // taken
 	r.ch.reap() // nothing left to apply
+	if r.kind.afterCount() != 1 {
+		t.Fatalf("after ran %d times", r.kind.afterCount())
+	}
 	if len(r.kind.applies) != 3 {
 		t.Fatalf("applies %v", r.kind.applies)
 	}

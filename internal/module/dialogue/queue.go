@@ -43,7 +43,11 @@ const (
 	reasonRefused = "refused" // failed: the call was rejected in the mod
 	reasonLost    = "lost"    // failed: the lease ran out
 	reasonBuild   = "build"   // failed: the job's input could not be built when it was handed out
+	reasonStore   = "store"   // failed: the answer could not be stored (too many tries, or the row is gone)
 )
+
+// maxApplyRetries: an answer whose apply failed is applied again at each reaper tick this many times (about a minute).
+const maxApplyRetries = 12
 
 // Limits of the channel (spec section 5.1, plan D1 / D2 / D10).
 const (
@@ -91,8 +95,12 @@ func (j wireJob) MarshalJSON() ([]byte, error) {
 	}{j.ID, wireKindTurn, j.Complete})
 }
 
-// usage is the tokens of a call.
-type usage struct{ In, Out, CacheRead int64 }
+// usage is the tokens and the time of a job's calls (summed over its attempts when it is handed to a kind's apply).
+type usage struct{ In, Out, CacheRead, LatencyMS int64 }
+
+func (u usage) plus(o usage) usage {
+	return usage{u.In + o.In, u.Out + o.Out, u.CacheRead + o.CacheRead, u.LatencyMS + o.LatencyMS}
+}
 
 // result is the mod's report of a call.
 type result struct {
@@ -111,17 +119,30 @@ type job struct {
 	sid     string
 	kind    string
 	attempt int
-	payload any // what the kind needs to build the call and to settle the row (a row id, a turn id ...)
+	payload any   // what the kind needs to build the call and to settle the row (a row id, a turn id ...)
+	use     usage // what the earlier attempts of this job used
 }
 
-// kindHandler is what a job kind (T9 turn summaries, T10 recaps) provides.
+// kindHandler is what a job kind (T9 turn summaries, T10 recaps) provides. The contract between the channel and a kind:
+//
+//  1. apply is idempotent. It only persists the answer, and uses the row's pending -> done change as a compare-and-set
+//     gate: a row that is no longer pending makes it return nil without writing. The channel may call it again for the
+//     same answer (a retry after a store error).
+//  2. after is called by the channel exactly once per job, after apply returned nil (also when that was a retry): hook the
+//     dialogue file, wake the push, queue a recap. It is best-effort and returns nothing.
+//  3. finish only moves a row that is still pending to the final state (compare-and-set); a row already done or ended is
+//     left alone. The channel may therefore call it where it cannot tell whether an answer was stored.
 type kindHandler interface {
 	// build makes the call's input from the store as it is now, at hand-out. An error ends the job as failed(build).
 	build(j job) (callInput, error)
-	// apply takes the answer's text (as the mod gave it). errFormat (or an error wrapping it) means the text is not what
-	// the kind expects: the channel retries once as attempt 2, then fails the job (format). Any other error means the
-	// result could not be stored: the channel keeps the answer and applies it again at each reap until it is taken.
+	// apply takes the answer's text (as the mod gave it) and the usage and latency summed over the job's attempts.
+	// errFormat (or an error wrapping it) means the text is not what the kind expects: the channel retries once as
+	// attempt 2, then fails the job (format). errGone means the row is gone and there is nothing to store: the job ends
+	// as failed(store) and is not retried. Any other error means the result could not be stored: the channel keeps the
+	// answer and applies it again at each reaper tick, up to maxApplyRetries times, then ends the job as failed(store).
 	apply(j job, text string, u usage) error
+	// after: see contract 2.
+	after(j job)
 	// finish ends a job that did not produce an answer: state skipped or failed, with one of the reasons above.
 	finish(j job, state, reason string)
 }
@@ -243,9 +264,15 @@ func (c *channel) enqueue(sid, kind string, payload any) (id, notQueued string) 
 		}
 	}
 	q.signal()
+	if len(dropped) > 0 {
+		c.inflight.Add(1) // under qmu with qstopped false: Stop waits for the dropped rows to be ended
+	}
 	c.qmu.Unlock()
-	for _, d := range dropped {
-		c.finishUnrun(d, stateSkipped, reasonBacklog)
+	if len(dropped) > 0 {
+		for _, d := range dropped {
+			c.finishUnrun(d, stateSkipped, reasonBacklog)
+		}
+		c.inflight.Done()
 	}
 	return j.id, ""
 }
@@ -288,7 +315,7 @@ func (c *channel) Next(ctx context.Context, stream, sid string, wait time.Durati
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for {
-		c.reap()
+		c.reapLeases()
 		c.qmu.Lock()
 		if c.qstopped {
 			c.qmu.Unlock()
@@ -311,16 +338,34 @@ func (c *channel) Next(ctx context.Context, stream, sid string, wait time.Durati
 			c.leases[j.id] = l
 		}
 		wake := q.wake
+		if len(skipped) > 0 {
+			c.inflight.Add(1) // under qmu with qstopped false: Stop waits for the skipped rows to be ended
+		}
 		c.qmu.Unlock()
-		for _, s := range skipped {
-			c.finishUnrun(s, stateSkipped, reasonCap)
+		if len(skipped) > 0 {
+			for _, s := range skipped {
+				c.finishUnrun(s, stateSkipped, reasonCap)
+			}
+			c.inflight.Done()
 		}
 		if handed != nil {
 			in, err := c.build(handed)
 			if err != nil {
 				c.d.logf("[dialogue] build a job: %v", err)
-				c.releaseOwned(l, nil)
-				c.finishUnrun(handed, stateFailed, reasonBuild)
+				// Only the lease's owner ends the job: when a reaper or Stop took the lease while the input was built, they
+				// ended it (lost / stopped) and this must not end it again. Taking the lease as processing makes Stop wait.
+				c.qmu.Lock()
+				owns := c.ownsLeaseLocked(l)
+				if owns {
+					l.processing = true
+					c.inflight.Add(1)
+				}
+				c.qmu.Unlock()
+				if owns {
+					c.finishUnrun(handed, stateFailed, reasonBuild)
+					c.release(l, nil)
+					c.inflight.Done()
+				}
 				continue
 			}
 			// The lease may have been reaped or stopped while the input was built (the store reads take a while): a job
@@ -373,18 +418,8 @@ func (c *channel) JobWaiting(sid string) bool {
 
 // release drops a lease and puts follow (a retry) at the head of the session, so the row keeps its place; it wakes the
 // session's pollers.
-func (c *channel) release(l *lease, follow *job) { c.releaseIf(l, follow, false) }
-
-// releaseOwned is release for a caller that has not been told the lease is still its own (the hand-out path): nothing
-// happens when a reaper or Stop took the lease meanwhile, since they finish the job and release it themselves.
-func (c *channel) releaseOwned(l *lease, follow *job) { c.releaseIf(l, follow, true) }
-
-func (c *channel) releaseIf(l *lease, follow *job, owned bool) {
+func (c *channel) release(l *lease, follow *job) {
 	c.qmu.Lock()
-	if owned && !c.ownsLeaseLocked(l) {
-		c.qmu.Unlock()
-		return
-	}
 	q := c.queueOf(l.job.sid)
 	delete(c.leases, l.job.id)
 	if q.lease == l {
@@ -418,16 +453,71 @@ func (c *channel) begin() bool {
 	return true
 }
 
-// reap retries the answers that could not be stored, and ends the leases that ran out: the call is lost, and the queue
-// moves on.
+// reap is the reaper goroutine's tick: it retries the answers that could not be stored, ends the waiting jobs of sessions
+// that can no longer take them, and ends the leases that ran out. Only the reaper retries stored answers, so one answer
+// never has two applies in flight.
 func (c *channel) reap() {
 	if !c.begin() {
 		return
 	}
 	defer c.inflight.Done()
 	c.retryPending()
+	c.sweepIncapable()
+	c.reapExpired()
+}
+
+// reapLeases is the part of the tick that Next and Result also run: leases that ran out are lost and the queue moves on.
+func (c *channel) reapLeases() {
+	if !c.begin() {
+		return
+	}
+	defer c.inflight.Done()
+	c.reapExpired()
+}
+
+// sweepIncapable ends the waiting jobs of a session whose mod stopped announcing the capability (skipped, no_mod; a job
+// already leased is left to its lease), and forgets the queues that are empty, so the map does not grow with every session
+// that was ever seen. A poller parked on a forgotten queue is woken and takes a fresh one.
+func (c *channel) sweepIncapable() {
+	c.qmu.Lock()
+	sids := make([]string, 0, len(c.qs))
+	for sid := range c.qs {
+		sids = append(sids, sid)
+	}
+	c.qmu.Unlock()
+	capable := make(map[string]bool, len(sids))
+	for _, sid := range sids { // capable is the caller's function: never called under qmu
+		capable[sid] = c.capable(sid)
+	}
+	var dead []*job
+	c.qmu.Lock()
+	if c.qstopped {
+		c.qmu.Unlock()
+		return
+	}
+	for sid, q := range c.qs {
+		if ok, seen := capable[sid]; seen && !ok {
+			dead = append(dead, q.waiting...)
+			q.waiting = nil
+		}
+		if len(q.waiting) == 0 && q.lease == nil {
+			q.signal()
+			delete(c.qs, sid)
+		}
+	}
+	c.qmu.Unlock()
+	for _, j := range dead { // the caller (reap) is registered with inflight
+		c.finishUnrun(j, stateSkipped, reasonNoMod)
+	}
+}
+
+func (c *channel) reapExpired() {
 	var lost []*lease
 	c.qmu.Lock()
+	if c.qstopped {
+		c.qmu.Unlock()
+		return
+	}
 	now := c.d.now()
 	for _, l := range c.leases {
 		if !l.processing && !now.Before(l.expires) {
@@ -447,7 +537,7 @@ func (c *channel) reap() {
 
 // Result takes a leased job's call; more says another job of the session is ready now. The lease must be the stream's.
 func (c *channel) Result(stream, jobID string, r result) (bool, error) {
-	c.reap()
+	c.reapLeases()
 	c.qmu.Lock()
 	l := c.leases[jobID]
 	if l == nil || l.stream != stream || l.processing || c.qstopped {
@@ -470,7 +560,8 @@ func (c *channel) Result(stream, jobID string, r result) (bool, error) {
 	}
 	c.release(l, follow)
 	c.qmu.Lock()
-	more := len(c.queueOf(l.job.sid).waiting) > 0
+	q := c.qs[l.job.sid]
+	more := q != nil && len(q.waiting) > 0
 	c.qmu.Unlock()
 	return more, nil
 }
