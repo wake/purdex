@@ -57,7 +57,7 @@ beforeEach(() => {
   send.mockResolvedValue({})
   resetTeamStores()
   useUnattendedStore.getState().reset()
-  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {} })
+  useTeamUiStore.setState({ panel: { width: 312 } })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })

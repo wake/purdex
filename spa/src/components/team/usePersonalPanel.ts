@@ -16,11 +16,6 @@ import { setRootsInterest } from '../../lib/task-groups/session-roots-lifecycle'
 import { personalGroupOf, personalTargetOf, type PersonalGroup, type PersonalTarget } from '../../lib/task-groups/personal'
 import { parseCcExtras, parseCcUsage } from '../../lib/usage-display'
 import { familyOf, type ModelFamily } from './model-family'
-import { firstSentence } from './seat-workbook'
-import { useLoadedSeatWorkbook } from './own-workbook'
-import { leadLastLine, useLeadJournalRead } from './member-lines'
-import { useJournalStore } from '../../stores/useJournalStore'
-import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { seatOf, usePersonaRevision, type Seat } from '../../lib/names/seat'
 
 /** The active tab's agent session when the tab is no team seat (the panel's rule 2), else null. */
@@ -119,16 +114,6 @@ export function usePersonalWho(target: PersonalTarget | null): PersonalWho {
     return pane?.content.kind === 'tmux-session' ? pane.content.cachedName : ''
   })
   return { title: pdxTitle !== '' ? pdxTitle : sessionName !== '' ? sessionName : cachedName, address, persona: address === '' ? null : seatOf(address) }
-}
-
-/** The session's last status line (R13): on a journal.v1 host the first line of its own newest journal entry, on an older host the first sentence of 「目前狀況」; '' when there is none. */
-export function usePersonalStatusLine(target: PersonalTarget): string {
-  const journalHost = useIsJournalHost(target.hostId)
-  useLeadJournalRead(target.hostId, target.agentSessionId, journalHost)
-  const journalLine = useJournalStore((s) => (journalHost ? leadLastLine(s, target.hostId, target.agentSessionId) : ''))
-  // Asks the host for THIS session's workbook (once per connection), whatever its agent type or liveness.
-  const status = useLoadedSeatWorkbook({ hostId: target.hostId, sessionId: target.agentSessionId }).conv?.status.trim() ?? ''
-  return journalHost ? journalLine : firstSentence(status)
 }
 
 /** The name the person is shown by: the persona's name with the title after it; with no persona the title alone (R15). */

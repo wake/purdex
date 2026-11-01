@@ -21,17 +21,13 @@ export interface HostEvent {
     | 'team.relay_quota'
     | 'team.roster'
     | 'relay.fresh'
-    | 'workbook.entry'
-    | 'workbook.status'
-    | 'workbook.todos'
-    | 'workbook.refresh_available'
-    | 'journal.changed'
     | 'jobs.changed'
     | 'pool.changed'
     | 'watch.changed'
     | 'nex.executions.hello'
     | 'nex.execution'
     | 'hostconfig.personas'
+    | 'dialogue.recap'
   session: string
   value: string
   /** `sessions` frames of a new daemon only: the list's version (#1255 daemon contract §3.2). Absent: unversioned. */

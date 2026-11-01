@@ -1,7 +1,7 @@
 // spa/src/components/team/TeamPanel.tsx — the team view inside the panel area (team spec §4.4; ported from the prototype
 // at f61748aa).
 //
-// Full: a sidebar-like list, lead on top and fixed, members draggable; each person takes one line (a second line only when the seat has a workbook: its task).
+// Full: a sidebar-like list, lead on top and fixed, members draggable; each person takes one line.
 // One-line: one cell per person (bot + light, context ring around the model shape) plus the team name; the cells wrap to a
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
@@ -15,19 +15,16 @@ import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { keepFocus } from './panel-focus'
-import { EndedGroup } from './TeamEndedGroup'
 import { PanelRow } from './TeamPanelRow'
+import { EndedGroup } from './TeamEndedGroup'
 import { TeamSettingsBlock } from './TeamSettingsBlock'
 import { offersAny, useTeamSettingsOffer } from './team-settings'
-import { useMemberFeed } from './member-lines'
-import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
-import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { seatLabel, seatName, usePersonaRevision } from '../../lib/names/seat'
+import { usePersonaRevision } from '../../lib/names/seat'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
@@ -39,8 +36,6 @@ interface Props {
   onSetMode: (mode: PanelMode) => void
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
-  /** The tab's journal.v1 host decides the workbook view is off (J-2b R2 A-1): no drill, whatever host the lead is on. The lead's own host also turns it off. */
-  noDrill?: boolean
 }
 
 export function TeamPanel(props: Props) {
@@ -51,22 +46,10 @@ export function TeamPanel(props: Props) {
   const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const canEdit = editable && roster !== undefined
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
-  // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
-  // On a journal.v1 host the workbook view is off (J-2b): a persisted drill is ignored here, not erased, so an older host still finds it.
-  const journalHost = useIsJournalHost(hostId) || props.noDrill === true
-  const drill = useTeamUiStore((s) => (journalHost ? undefined : s.teamDrill[team.teamKey]))
   usePersonaRevision() // the heading reads the persona store without subscribing: redraw when it loads or changes
-  const ended = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId) : undefined)
-  const live = drill ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId) : undefined
-  // the persona's name (through the daemon's address the seat had), else the title it had, else its id
-  const drillTitle = drill
-    ? live ? seatName(live.address, live.title) : ended ? ((ended.address ? seatLabel(ended.address, ended.title) : null) ?? ended.title) : drill.sessionId
-    : ''
   return (
-    <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className={`text-xs text-text-primary${drill ? ' flex flex-col flex-1 min-h-0' : ''}`}>
-      {drill ? (
-        <TeamSeatWorkbookView teamKey={team.teamKey} hostId={drill.hostId} sessionId={drill.sessionId} title={drillTitle} />
-      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} noDrill={journalHost} hdr={hdr} />}
+    <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className="text-xs text-text-primary">
+      {team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
       {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
@@ -104,8 +87,7 @@ export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-/** `noDrill`: the lead lives on a journal.v1 host (J-2b), where no row offers the workbook drill, whatever host the seat is on. */
-function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, hdr }: Props & { noDrill: boolean; hdr: HeaderHandlers }) {
+function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
   // The team's settings sit at the bottom of the panel, always shown, on the lead's own team only (the lead's tab is the one in view) and only where the host offers
@@ -113,8 +95,6 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
   const [leadHost, leadTeam = ''] = teamKey.split('\u0000')
   const settingsOffer = useTeamSettingsOffer(leadHost, leadTeam)
   const showSettings = offersAny(settingsOffer) && lead.tabId !== null && lead.tabId === activeTabId
-  const rosterKey = members.map((m) => m.sessionId).sort().join('\u0000') // the member set: a join, a leave or a relay to a new session
-  const feed = useMemberFeed(lead.hostId, lead.sessionId, rosterKey, `team:${teamKey.split('\u0000')[1] ?? ''}`) // the team's journal unit key
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')
@@ -128,11 +108,9 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
         </span>
       </div>
       <div className="border-t border-border-subtle py-1.5 flex flex-col gap-1">
-        <PanelRow noDrill={noDrill} teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
+        <PanelRow teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
         {members.map((m) => (
           <PanelRow
-            noDrill={noDrill}
-            member={feed?.get(m.sessionId)}
             key={m.sessionId}
             teamKey={teamKey}
             seat={m}
@@ -145,7 +123,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
           />
         ))}
       </div>
-      <EndedGroup teamKey={teamKey} noDrill={noDrill} />
+      <EndedGroup teamKey={teamKey} />
       {showSettings && <TeamSettingsBlock hostId={leadHost} teamId={leadTeam} name={team.name} />}
     </>
   )

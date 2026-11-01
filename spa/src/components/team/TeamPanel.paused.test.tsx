@@ -7,7 +7,6 @@ import { TeamPanelArea } from './TeamPanelArea'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { clearModuleRegistry } from '../../lib/module-registry'
@@ -36,8 +35,7 @@ beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
-  useWorkbookStore.getState().reset()
-  useTeamUiStore.setState({ panel: { width: 412 }, teamDrill: {}, endedSeats: {} })
+  useTeamUiStore.setState({ panel: { width: 412 }, endedSeats: {} })
   clearModuleRegistry()
   useShownHostsStore.setState({ ids: [HOST] })
   useI18nStore.getState().setLocale('zh-TW')

@@ -1,28 +1,26 @@
-// spa/src/components/team/TeamEndedGroup.tsx — the full list's 「已結束」 group (moved out of TeamPanel.tsx, #2418).
+// spa/src/components/team/TeamEndedGroup.tsx — the full list's 「已結束」 group (moved out of TeamPanel.tsx, #2418; restored for the recap history, plan T14b).
 import { useState } from 'react'
 import { CaretRight } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
-import { useJournalStore } from '../../stores/useJournalStore'
+import { useDialogueStore } from '../../stores/useDialogueStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { openRecapView, type RecapTarget } from '../../stores/useRecapViewStore'
 import { keepFocus } from './panel-focus'
 import { seatLabel, usePersonaRevision } from '../../lib/names/seat'
 
 /** Seats that left the team: a collapsed 「已結束 (N)」 group at the bottom of the full list (absent with none); a click on one
- *  drills into its workbook, which the daemon keeps after the session is gone. */
-export function EndedGroup({ teamKey, noDrill = false }: { teamKey: string; noDrill?: boolean }) {
+ *  opens its recap history, which the daemon keeps after the session is gone (nothing new can be made for it). */
+export function EndedGroup({ teamKey }: { teamKey: string }) {
   const t = useI18nStore((s) => s.t)
   usePersonaRevision() // the names read the persona store without subscribing: redraw when it loads or changes
   const all = useTeamUiStore((s) => s.endedSeats[teamKey])
-  const support = useWorkbookStore((s) => s.support)
-  const journal = useJournalStore((s) => s.sticky)
+  const support = useDialogueStore((s) => s.support)
   const [open, setOpen] = useState(false)
-  if (noDrill) return null
-  // Only a seat on a host that lists `workbook.v1` has a workbook to open (openWorkbook does nothing elsewhere); on a journal.v1
-  // host the workbook view is off (J-2b), so its ended seats have nothing to drill into.
-  const ended = (all ?? []).filter((e) => support[e.hostId]?.v1 === true && journal[e.hostId] !== true)
+  // Only a seat on a host that lists `dialogue.v1` has a recap history to open.
+  const ended = (all ?? []).filter((e) => support[e.hostId] === true)
   if (ended.length === 0) return null
   const label = t('team.panel.ended', { count: ended.length })
+  const target = (e: (typeof ended)[number]): RecapTarget => ({ scope: teamKey, teamKey, hostId: e.hostId, sessionId: e.sessionId, title: e.title, address: e.address ?? '' })
   return (
     <div data-testid="team-panel-ended" className="border-t border-border-subtle py-1">
       <button
@@ -43,8 +41,8 @@ export function EndedGroup({ teamKey, noDrill = false }: { teamKey: string; noDr
           data-testid="team-panel-ended-row"
           title={t('team.panel.ended_hint')}
           onMouseDown={keepFocus}
-          onClick={() => useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId })}
-          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
+          onClick={() => openRecapView(target(e))}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') openRecapView(target(e)) }}
           className="mx-1.5 pl-6 pr-2 py-1.5 rounded-md truncate text-text-muted hover:bg-surface-hover hover:text-text-secondary cursor-pointer"
         >
           {(e.address ? seatLabel(e.address, e.title) : null) ?? e.title}

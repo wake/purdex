@@ -9,6 +9,7 @@ vi.mock('../host-api', () => ({ fetchHostInfo: (hostId: string) => fetchHostInfo
 import { startUnattendedSupport } from './unattended-support'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { selectDialogueSupport, useDialogueStore } from '../../stores/useDialogueStore'
 import { useRelayQuotaStore } from './relay-quota'
 import { teamKey, useMaxMembersStore } from './max-members'
 
@@ -69,6 +70,34 @@ describe('startUnattendedSupport', () => {
     await flush()
     expect(useUnattendedStore.getState().byHost.h1?.editSupport).toBe('yes')
     expect(useUnattendedStore.getState().byHost.h2?.editSupport).toBe('no')
+  })
+
+  it('dialogue.v1 in the capabilities → the dialogue store marks the host supported; without it, not; a failed probe or a drop of the connection clears it', async () => {
+    useDialogueStore.getState().reset()
+    useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
+    fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['relay.unattended.v1', 'dialogue.v1'] : ['relay.unattended.v1']))
+    stop = startUnattendedSupport()
+    await flush()
+    expect(selectDialogueSupport('h1')).toBe(true)
+    expect(selectDialogueSupport('h2')).toBe(false)
+    useHostStore.getState().setRuntime('h1', { status: 'disconnected' }) // the connection it was learned on is gone
+    expect(selectDialogueSupport('h1')).toBe(false)
+    fetchHostInfo.mockRejectedValue(new Error('down'))
+    useHostStore.getState().setRuntime('h1', { status: 'connected' })
+    await flush()
+    expect(selectDialogueSupport('h1')).toBe(false)
+  })
+
+  it('a removed or re-pointed host\'s dialogue cache is forgotten', () => {
+    useDialogueStore.getState().reset()
+    useDialogueStore.getState().setSupport('h1', true)
+    useDialogueStore.getState().setSupport('h2', true)
+    stop = startUnattendedSupport()
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1', '100.64.0.9') } }) // re-point h1
+    expect(selectDialogueSupport('h1')).toBe(false)
+    const { h2: _gone, ...rest } = useHostStore.getState().hosts
+    useHostStore.setState({ hosts: rest }) // remove h2
+    expect(selectDialogueSupport('h2')).toBe(false)
   })
 
   it('relay.unanswered.v1 in the capabilities → the App reads a card that ran out; without it, not', async () => {

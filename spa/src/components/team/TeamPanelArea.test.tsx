@@ -55,7 +55,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useI18nStore.getState().setLocale('zh-TW')
-  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {} })
+  useTeamUiStore.setState({ panel: { width: 312 } })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })
@@ -72,27 +72,6 @@ describe('who the panel shows for', () => {
     expect(screen.queryByTestId('team-panel')).toBeNull()
     setActive(null)
     expect(screen.queryByTestId('team-panel')).toBeNull()
-  })
-
-  it('a drill shows the seat workbook in the same frame instead of the list', () => {
-    scene()
-    mount()
-    act(() => { useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }) })
-    expect(screen.getByTestId('team-panel-area')).toBeTruthy()
-    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
-    expect(screen.queryAllByTestId('team-panel-row')).toHaveLength(0)
-    act(() => useTeamUiStore.getState().setTeamDrill(KEY, null))
-    expect(screen.queryByTestId('team-seat-workbook')).toBeNull()
-    expect(rows().length).toBeGreaterThan(0)
-  })
-  it('a drill survives a title-bar round trip of the panel (the drill is the store\'s, not the component\'s)', () => {
-    scene()
-    mount()
-    act(() => useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }))
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
-    expect(screen.queryByTestId('team-panel-area')).toBeNull()
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'full'))
-    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
   })
 
   it('active row = the active tab\'s seat', () => {
@@ -238,11 +217,10 @@ describe('full mode', () => {
     const line1 = lead.getByTestId('team-panel-ring').parentElement!
     expect(line1.lastElementChild).toBe(lead.getByTestId('team-panel-ring'))
     expect(line1.textContent).toContain('title L')
-    // the number beside the ring is what is LEFT (100 - 42); no model / effort text in the row, no second line without a workbook
+    // the number beside the ring is what is LEFT (100 - 42); no model / effort text in the row
     expect(lead.getByTestId('team-panel-ctx')).toHaveTextContent('58%')
     for (const id of ['team-panel-model', 'team-panel-effort']) expect(lead.queryByTestId(id)).toBeNull()
     expect(leadRow.textContent).not.toMatch(/Opus|high/)
-    expect(leadRow.querySelectorAll('[data-testid="team-panel-task"]').length).toBe(0)
     expect(leadRow.title).toBe('Opus · high · context 剩 58%') // REMAINING (100 - 42); the ring still draws the used 42
     expect(rows()[1].title).toBe('Sonnet · low · context 剩 93%') // model_id of the context sample
   })

@@ -16,11 +16,8 @@ import { PROBE_ONLY_FLAGS, useUnattendedStore } from '../../stores/useUnattended
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { useMaxMembersStore } from './max-members'
 import { useRootsStore } from './roots'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
-import { useJournalStore } from '../../stores/useJournalStore'
-import { useJournalMembersStore } from '../../stores/useJournalMembersStore'
-import { JOURNAL_CAPABILITY, JOURNAL_CONFIRM_CAPABILITY, JOURNAL_MEMBERS_CAPABILITY, JOURNAL_SESSIONS_CAPABILITY } from '../journal/types'
-import { WORKBOOK_V1_CAPABILITY, WORKBOOK_V2_CAPABILITY } from '../workbook/types'
+import { useDialogueStore } from '../../stores/useDialogueStore'
+import { DIALOGUE_CAPABILITY } from '../dialogue/types'
 import { NOTIFY_GROUP_LABELS_CAPABILITY } from '../notify/types'
 import { STAGES_CAPABILITY } from '../conversations/types'
 import { TEAM_MAX_MEMBERS_V2_CAPABILITY, PERSON_CAPABILITY, RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, TEAM_PAUSE_CAPABILITY, UNANSWERED_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
@@ -39,9 +36,7 @@ export function startUnattendedSupport(): () => void {
     // and that read opens its GET bracket (so the new rows reach the store) only while the last answer still says quotas.
     useRelayQuotaStore.getState().fence(hostId) // and the quota reads: a read out over the last connection writes nothing
     useUnattendedStore.getState().invalidateSupport(hostId) // what the last connection said is not this one's answer (every flag: #2309)
-    useWorkbookStore.getState().fence(hostId) // same for the workbook: a new connection generation, support unknown until this answer
-    useJournalStore.getState().fence(hostId) // and the journal: unknown until this answer, but its sticky last answer stays
-    useJournalMembersStore.getState().fence(hostId) // and the member lines' gate
+    useDialogueStore.getState().setSupport(hostId, false)
     fetchHostInfo(hostId).then(
       (info) => {
         if (current.get(hostId) !== generation) return
@@ -57,13 +52,10 @@ export function startUnattendedSupport(): () => void {
         useUnattendedStore.getState().setStagesSupport(hostId, listed.includes(STAGES_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setMaxMembersV2Support(hostId, listed.includes(TEAM_MAX_MEMBERS_V2_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setNotifyGroupLabelsSupport(hostId, listed.includes(NOTIFY_GROUP_LABELS_CAPABILITY) ? 'yes' : 'no')
-        // The workbook flags share this guard; each answer is a new connection generation for the workbook store
-        // (a seat is loaded once per generation, workbook-loader.ts).
-        useWorkbookStore.getState().setSupport(hostId, { v1: listed.includes(WORKBOOK_V1_CAPABILITY), v2: listed.includes(WORKBOOK_V2_CAPABILITY) })
-        useJournalStore.getState().setSupport(hostId, listed.includes(JOURNAL_CAPABILITY), listed.includes(JOURNAL_CONFIRM_CAPABILITY), listed.includes(JOURNAL_SESSIONS_CAPABILITY))
-        useJournalMembersStore.getState().setSupport(hostId, listed.includes(JOURNAL_MEMBERS_CAPABILITY))
+        useDialogueStore.getState().setSupport(hostId, listed.includes(DIALOGUE_CAPABILITY))
       },
       () => { // not retried until the next trigger; the probe's flags stay unknown rather than keeping an old 'yes'
+        if (current.get(hostId) === generation) useDialogueStore.getState().setSupport(hostId, false) // the dialogue store keeps its own flag: no answer, no support
         // `support` was made unknown when this probe started; a `team.unattended` frame that proved it since is live
         // evidence from this connection and stays, so only the flags nothing but the probe can answer are dropped again.
         if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateSupport(hostId, PROBE_ONLY_FLAGS)
@@ -84,17 +76,11 @@ export function startUnattendedSupport(): () => void {
     for (const hostId of Object.keys(store.byHost)) {
       if (!next.hosts[hostId]) store.forgetHost(hostId)
     }
-    for (const hostId of Object.keys(useJournalStore.getState().sticky)) {
-      if (!next.hosts[hostId]) useJournalStore.getState().forgetHost(hostId) // a removed host's journal answer goes with it
-    }
-    for (const hostId of Object.keys(useJournalMembersStore.getState().support)) {
-      if (!next.hosts[hostId]) useJournalMembersStore.getState().forgetHost(hostId)
-    }
     for (const hostId of quotaHostIds(useRelayQuotaStore.getState())) {
       if (!next.hosts[hostId]) useRelayQuotaStore.getState().forgetHost(hostId) // a removed host's numbers go with it
     }
     for (const hostId of Object.keys(prev.hosts)) {
-      if (!next.hosts[hostId]) { useMaxMembersStore.getState().forgetHost(hostId); useRootsStore.getState().forgetHost(hostId) } // and a cap / roots request still out to it
+      if (!next.hosts[hostId]) { useMaxMembersStore.getState().forgetHost(hostId); useRootsStore.getState().forgetHost(hostId); useDialogueStore.getState().forgetHost(hostId) } // and a cap / roots request still out to it, and its recaps
     }
     for (const [hostId, host] of Object.entries(next.hosts)) {
       const before = prev.hosts[hostId]
@@ -105,8 +91,7 @@ export function startUnattendedSupport(): () => void {
         useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
         useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
         useRootsStore.getState().forgetHost(hostId)
-        useJournalStore.getState().forgetHost(hostId) // the old daemon's journal.v1 answer, sticky included, is not the new one's
-        useJournalMembersStore.getState().forgetHost(hostId) // and its member lines
+        useDialogueStore.getState().forgetHost(hostId) // and its recaps and support
       }
       if (next.runtime[hostId]?.status !== 'connected') {
         // The connection the capabilities were learned on is gone: they are unknown until the next probe answers, and an
@@ -114,9 +99,7 @@ export function startUnattendedSupport(): () => void {
         if (prev.runtime[hostId]?.status === 'connected') {
           current.delete(hostId)
           store.invalidateSupport(hostId)
-          useWorkbookStore.getState().fence(hostId) // the connection is gone: requests still out must not land
-          useJournalStore.getState().fence(hostId) // unknown now; the sticky answer stays so the journal UI does not flash back
-          useJournalMembersStore.getState().fence(hostId)
+          useDialogueStore.getState().setSupport(hostId, false)
           useRelayQuotaStore.getState().fence(hostId) // a quota read out over this connection must not land either
         }
         continue

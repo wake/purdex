@@ -10,7 +10,6 @@ import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { makeCollection, makePersona } from '../../lib/names/__fixtures__/personas'
@@ -51,7 +50,6 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useManualGroupsStore.setState({ order: [], groups: {} })
-  useWorkbookStore.getState().reset()
   useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
   usePersonaStore.setState({ byHost: {} })
   useI18nStore.getState().setLocale('zh-TW')
@@ -142,17 +140,6 @@ describe('a tab that shows an agent session and is no team seat', () => {
     mount()
     expect(screen.getByTestId('personal-cell').getAttribute('data-ended')).toBe('true')
     expect(screen.getByTestId('seat-icon').getAttribute('data-light')).toBe('false') // no light, not just dimmed
-  })
-})
-
-describe('the status line asks for the panel\'s own session', () => {
-  it('a codex session\'s workbook is loaded (not only a live cc pane\'s)', () => {
-    const orig = useWorkbookStore.getState().loadSeat
-    const loadSeat = vi.fn(() => Promise.resolve('ok'))
-    act(() => { useWorkbookStore.setState((s) => ({ support: { ...s.support, [HOST]: { v1: true, v2: false } }, loadSeat }) as never) })
-    scene(); addTab(ccTab('cx', { type: 'codex', sessionId: 'S2' })); setActive('cx'); shared('line'); mount()
-    expect(loadSeat).toHaveBeenCalledWith(HOST, 'S2')
-    act(() => { useWorkbookStore.setState({ loadSeat: orig } as never) })
   })
 })
 

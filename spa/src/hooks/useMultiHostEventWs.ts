@@ -32,8 +32,8 @@ import { handlePersonasEvent, PERSONAS_EVENT_TYPE } from '../lib/names/persona-l
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { handleRelayFreshEvent } from '../lib/relay/fresh-ws'
 import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
-import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
-import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
+import { DIALOGUE_RECAP_EVENT_TYPE } from '../lib/dialogue/types'
+import { useDialogueStore } from '../stores/useDialogueStore'
 import { jobsDriver, startJobsCatchUp } from '../lib/pool/jobs-driver-live'
 import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
 import { handlePoolEvent, isPoolEvent } from '../lib/pool/pool-events'
@@ -338,13 +338,11 @@ export function useMultiHostEventWs() {
             handleRelayFreshEvent(hostId, event.value)
             return
           }
-          if (isWorkbookEvent(event.type)) {
-            // The session workbook (plan WA-1.4): an entry or a status, written to the store and never a reason to
-            // fetch. Bound to the connection exactly like `team.roster` above, so a removed or re-pointed host's old
-            // daemon cannot write back after the store was forgotten (roster-forget.ts).
+          if (event.type === DIALOGUE_RECAP_EVENT_TYPE) {
+            // A recap was written (dialogue plan T10): the store re-reads that session's recaps when it holds it. Bound to the connection like the frames above.
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
-            handleWorkbookEvent(hostId, event.type, event.value)
+            useDialogueStore.getState().applyRecapEvent(hostId, event.value)
             return
           }
           if (isJobsEvent(event.type)) {
@@ -374,14 +372,6 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleWatchEvent(hostId, event.type, event.value)
-            return
-          }
-          if (isJournalEvent(event.type)) {
-            // The workbook journal (J-2a): marks the named resource of a unit stale, never a reason to fetch. Bound to
-            // the connection exactly like the workbook frames above.
-            const now = useHostStore.getState().hosts[hostId]
-            if (!now || connectionKey(now) !== configKey) return
-            handleJournalEvent(hostId, event.type, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in

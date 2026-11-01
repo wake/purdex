@@ -10,7 +10,8 @@ import { Avatar } from '../Avatar'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { UNGROUPED_GREY, type PersonalGroup, type PersonalTarget } from '../../lib/task-groups/personal'
-import { usePersonalNames, usePersonalReading, usePersonalStatusLine } from './usePersonalPanel'
+import { usePersonalNames, usePersonalReading } from './usePersonalPanel'
+import { useRecapLine } from '../recap/useRecapLine'
 
 /** The text on a coloured capsule (the team capsule's). */
 const ON_COLOR = '#14141f'
@@ -61,7 +62,7 @@ export function PersonalNameLine({ target, className = '' }: { target: PersonalT
 }
 
 /**
- * The session's avatar cell: the persona's face (initials on the title with no persona) with the agent light, and the context ring. The tooltip carries the name, the model, what is left of the context and the last status line (R10);
+ * The session's avatar cell: the persona's face (initials on the title with no persona) with the agent light, and the context ring. The tooltip carries the name, the model, what is left of the context (R10) and, on a line of its own, the recap's headline;
  * an ended session is dim, with no light and a dash for the context (R2).
  */
 export function PersonalCell({ target, isActive = true }: { target: PersonalTarget; isActive?: boolean }) {
@@ -70,13 +71,18 @@ export function PersonalCell({ target, isActive = true }: { target: PersonalTarg
   const hostMain = useSeatHostMain(target.hostId, target.sessionCode)
   const r = usePersonalReading(target)
   const { name, persona } = usePersonalNames(target)
-  const line = usePersonalStatusLine(target)
   const ended = target.ended
   const ctx = ended ? undefined : r.ctx
   const model = ended ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '?'
+  // The recap's headline (the title of the latest turn summary before the first recap) is the tooltip's last line.
+  const line = useRecapLine(target.hostId, target.agentSessionId)
+  const recapText = line === null ? '' : line.kind === 'recap' ? line.headline : line.kind === 'turn' ? line.title : ''
   const tip = useMemo(
-    () => [name, ended ? t('personal.ended') : model, ctxTip(ctx, t), line].filter((x) => x !== '').join(' · '),
-    [name, ended, model, ctx, line, t],
+    () => {
+      const head = [name, ended ? t('personal.ended') : model, ctxTip(ctx, t)].filter((x) => x !== '').join(' · ')
+      return recapText !== '' ? `${head}\n${recapText}` : head
+    },
+    [name, ended, model, ctx, t, recapText],
   )
   return (
     <span
