@@ -17,7 +17,6 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
-	"github.com/wake/purdex/internal/journal"
 	"github.com/wake/purdex/internal/module/hostconfig"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/personas"
@@ -131,8 +130,10 @@ func TestPersonaPool_APutThroughTheRealHostconfigReachesThePoolAndTheJournal(t *
 	if d, ok := ipeers.PoolDisplayName("anna"); !ok || d != "Anna K." {
 		t.Errorf("a retired persona's display name = %q, %v", d, ok)
 	}
-	if got := journal.DisplayName("mlab/purdex-3f-hiro"); got != "Hiro Tanaka" {
-		t.Errorf("the journal shows %q, want the persona's display name", got)
+	pool, ok := ipeers.PoolNameOf("purdex-3f-hiro")
+	require.True(t, ok, "purdex-3f-hiro ends in a pool name")
+	if got, ok := ipeers.PoolDisplayName(pool); !ok || got != "Hiro Tanaka" {
+		t.Errorf("the pool name shows %q, %v, want the persona's display name", got, ok)
 	}
 }
 

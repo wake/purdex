@@ -9,14 +9,15 @@ package dialogue
 import (
 	"context"
 	"log"
-	"net/http"
 	"path/filepath"
 	"sync"
 
 	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/modevents"
 	agentmod "github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/workbooklines"
 )
 
 // turnEndSubscriber is the part of the agent module's TerminalSessions the module needs.
@@ -38,6 +39,16 @@ type Module struct {
 
 	intake       *intake
 	unsubTurnEnd func()
+
+	// The job channel (queue.go): created by Start, read by the "workbook.jobs" service. kinds is what T9/T10 fill in
+	// before Start: one handler per job kind.
+	jobs  *channel
+	lines *PushLines             // the push wait (registered at Init)
+	kinds map[string]kindHandler // extra kinds a test or T10 adds; Start adds the turn-summary kind
+	rc    *recapper              // decides when a recap is queued (created by Start)
+
+	stopReaper context.CancelFunc
+	reaperDone chan struct{}
 }
 
 func New() *Module { return &Module{} }
@@ -62,11 +73,19 @@ func (m *Module) Init(c *core.Core) error {
 		return nil
 	}
 	m.store, m.ready, m.initErr = st, true, ""
+	// The mod's routes find the channel by this name (jobs.go); the service says not ready until Start builds the channel.
+	if c.Registry != nil {
+		c.Registry.Register(jobsKey, jobsService{m: m})
+		// The push module's hold waits here for the summary of a Stop; the lines answer false once the store is gone.
+		m.lines = StorePushLines(func() *Store {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.store
+		})
+		c.Registry.Register(workbooklines.Key, m.lines)
+	}
 	return nil
 }
-
-// RegisterRoutes: PR 1 has no HTTP API (the files are the interface); the core's Module interface wants the method.
-func (m *Module) RegisterRoutes(*http.ServeMux) {}
 
 // Status is what the daemon reports for the module.
 func (m *Module) Status() map[string]any {
@@ -129,20 +148,91 @@ func (m *Module) Start(context.Context) error {
 			return prev, ok
 		}
 	}
-	w := NewWriter(filepath.Join(dataDir, "dialogue"), st, prevOf, Hooks{}, WithLogf(logf))
-	in := newIntake(intakeDeps{turns: turns, writer: w, store: st, logf: logf, timing: defaultTiming})
+	hooks := Hooks{
+		Placed:  func(sid, turnID string) []string { return placedBlocks(st, sid, turnID) },
+		Carried: func(sid string, beforeNo int) string { return carriedRecap(st, sid, beforeNo) },
+	}
+	w := NewWriter(filepath.Join(dataDir, "dialogue"), st, prevOf, hooks, WithLogf(logf))
+	// What the last run left pending has no job any more: end it, or the push would wait for it until its timeout.
+	if n, err := st.FailPendingSummaries(); err != nil {
+		logf("[dialogue] end the summaries left pending: %v", err)
+	} else if n > 0 {
+		logf("[dialogue] %d turn summaries were left pending by the last run: failed (stopped)", n)
+	}
+	var root team.LineageRootResolver
+	if reg != nil {
+		if svc, ok := reg.Get(team.LineageRootKey); ok {
+			root, _ = svc.(team.LineageRootResolver)
+		}
+	}
+	lines := m.lines
+	if lines == nil {
+		lines = StorePushLines(func() *Store { return st })
+	}
+	sumIn := &summaryIntake{st: st, lines: lines, root: root, logf: logf}
+	in := newIntake(intakeDeps{turns: turns, writer: w, store: st, logf: logf, timing: defaultTiming,
+		onWritten: sumIn.onWritten, onSettled: sumIn.onSettled})
+	// The channel is built before the subscription, so the first turn end can already queue a job.
+	var capable func(sid string) bool
+	if reg != nil {
+		// A session is capable when a live stream of it announced workbook.v2 within the last 30 s; the registry is the
+		// mod event channel's ("modevents" is its service name, kept as a string so this module does not import that one).
+		if svc, ok := reg.Get("modevents"); ok {
+			if mr, ok := svc.(*modevents.Registry); ok {
+				capable = func(sid string) bool { return mr.SessionCapable(sid, modevents.CapWorkbookV2, modevents.CapsFresh) }
+			}
+		}
+	}
+	m.mu.Lock()
+	kinds := map[string]kindHandler{}
+	for k, h := range m.kinds {
+		kinds[k] = h
+	}
+	m.mu.Unlock()
+	rc := newRecapper(st, w, logf)
+	rc.broadcast = func(typ, value string) {
+		if m.core != nil && m.core.Events != nil {
+			m.core.Events.Broadcast("", typ, value)
+		}
+	}
+	kinds[kindTurnSummary] = &summaryKind{st: st, w: w, lines: lines, recap: func(sid string) { rc.request(sid, "every30") }, logf: logf}
+	kinds[kindRecap] = &recapKind{r: rc}
+	ch := newChannel(chanDeps{capable: capable, handlers: kinds, logf: logf})
+	rc.enqueue = ch.enqueue
+	sumIn.jobs = ch
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); ch.runReaper(ctx) }()
 	m.mu.Lock()
 	m.intake = in
+	m.jobs, m.stopReaper, m.reaperDone, m.rc = ch, cancel, done, rc
 	m.unsubTurnEnd = sub.SubscribeTurnEnd(in.OnTurnEnd)
 	m.mu.Unlock()
 	return nil
 }
 
-// Stop unsubscribes and waits for the workers, so nothing writes once it returns; the store itself is released by Close.
+// requestRecap queues a recap of the session (trigger: every30 | open | manual): "queued", "up_to_date" or "unavailable"
+// (the module is not running, or the session cannot take a job now).
+func (m *Module) requestRecap(sid, trigger string) string {
+	m.mu.Lock()
+	rc := m.rc
+	m.mu.Unlock()
+	if rc == nil {
+		return recapUnavailable
+	}
+	return rc.request(sid, trigger)
+}
+
+// Stop unsubscribes and waits for the workers, then stops the job channel, so nothing writes once it returns; the store
+// itself is released by Close. The intake goes first: it is the only thing that queues new jobs, and its workers never wait
+// on the channel, so they end at once; the channel then ends what is queued or leased (their rows are written while the
+// store is still open) and waits for the results being applied, which wakes every push wait before its timeout.
 func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
 	st, in, unsub := m.store, m.intake, m.unsubTurnEnd
+	ch, stopReaper, reaperDone := m.jobs, m.stopReaper, m.reaperDone
 	m.store, m.ready, m.intake, m.unsubTurnEnd = nil, false, nil, nil
+	m.jobs, m.stopReaper, m.reaperDone = nil, nil, nil
 	if st != nil {
 		m.closing = st // released by Close, after the HTTP server drained
 	}
@@ -152,6 +242,15 @@ func (m *Module) Stop(context.Context) error {
 	}
 	if in != nil {
 		in.Stop()
+	}
+	if stopReaper != nil {
+		stopReaper()
+	}
+	if ch != nil {
+		ch.Stop()
+	}
+	if reaperDone != nil {
+		<-reaperDone
 	}
 	return nil
 }

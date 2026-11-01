@@ -227,9 +227,12 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 ### T8. 派工通道搬進 dialogue　**需要判斷**
 
 - 新增 `internal/module/dialogue/{queue,jobs,outcome,settle}.go`，照基準改寫（§4.0-2），保留：
-  - per-conversation 佇列、只有 `turn` 種類受「最多 3 個等待、丟最舊」限制（`queue.go:179-201`）；
+  - 每個 session 一個佇列（工作簿是每個 lineage 一個；改成 session 是因為 job 只在該 session 自己的程序裡跑）；session 不再能接 job（capability 過期）時，reaper 把它排隊中的 job 結成 skipped(no_mod) 並清掉佇列（T8 審查後加：否則接力後舊 session 的 job 永遠沒人領）；
+  - 只有 `turn-summary` 種類受「最多 3 個等待、丟最舊」限制（`queue.go:179-201`）；
   - 每主機每小時 300 次上限（`admit`，`queue.go:236`）；
-  - 租約＝timeout＋10 s、過期回收、結果寫入失敗的重試（`settle.go`）；
+  - 租約＝timeout＋10 s、過期回收 → failed(lost)；
+  - 結果寫入失敗的重試（`settle.go`）：只由 reaper 重試、同一答案同時最多一個在跑，最多 12 次，用完 failed(store)（T8 審查後定）；
+  - 種類處理分兩段：`apply` 只持久化（以 pending→done 的 CAS 為閘門，冪等），`after` 在 apply 成功後恰好呼叫一次（接對話檔、喚醒推播、排 recap）；`finish` 只把仍是 pending 的那筆改成終態（T8 審查後定）；
   - `Next` 的長輪詢、結果核對 stream 與租約；
   - `Complete{Model:"haiku", MaxTokens, Effort:"low", TimeoutMS:30000}`；
   - 未回答的結果分類（`outcome.go:94-121`）：`empty-reply` 與格式錯重試一次（attempt 2，同種類），再錯 failed(format)；`api-error` 帶 `authentication_failed` → failed(auth)，其他 → failed(api)；`aborted` 依耗時分 failed(timeout)／failed(stopped)；`refused` → failed(refused)；其他 → failed(api)；
@@ -243,7 +246,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   2. 第 4 個等待中的 turn-summary 讓最舊的變 skipped（backlog），recap 不受影響；
   3. 每小時上限到了，`Next` 把 job 結成 skipped（cap）；
   4. 別的 stream 回結果得到 `ErrNotLeased`；
-  5. 租約過期被回收，job 回到 failed（timeout）；
+  5. 租約過期被回收，job 結成 failed（lost）；
   6. 結果處理函式寫入失敗，reaper 重試；
   7. mod 不 capable 的 session 不排 job；
   8. 結果分類：`empty-reply` 第一次排 attempt 2、第二次 failed(format)；`authentication_failed`、其他 `api-error`、`aborted`（逾時與未逾時）、`refused`、未知理由各自得到上面的 reason；
@@ -270,10 +273,13 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   - 超過上限一律在字詞邊界截斷（spec §3）：新增 `cutAtWord(s, n)`，先取前 n 個字，若切點落在連續的英數字、`_`、`.`、`/`、`-` 中間，就退到那一串的開頭；退完剩不到 n 的一半才在 n 硬切。中文字之間都算字詞邊界；
   - `title` 16 字，用 `cutAtWord`，不加省略號；`push` 用工作簿的 `repairPush`（40 字，在最後一個標點截，截不出來就丟掉、推播用原文）；`summary` 150 字，先找 150 字內最後一個句號，沒有就 `cutAtWord` 加「…」；
   - 格式錯重試一次（attempt 2），再錯記 failed（format），沿用 T8 的分類。
-- 寫入（一個交易）：state done／skipped、四欄、`push_ready_at`、用量；done 且非 skip 時 `since_recap + 1`。交易成功後：
-  1. 對話檔接上 `<turn-summary N · HH:MM | title>` 與內文（N＝`dlg_turns.turn_no`，HH:MM＝`turn_at` 的本地時間）；
-  2. 喚醒推播等待；
-  3. `since_recap ≥ 30` 時排一個 recap（T10）。
+- 寫入照 T8 的兩段契約：
+  - `apply`（一個交易，以 `state='pending'` 為條件的 UPDATE 當閘門）：state done／skipped、四欄、`push_ready_at`、用量；done 且非 skip 時 `since_recap + 1`。閘門沒過（已不是 pending）就回 nil、什麼都不做；
+  - `after`（apply 成功後恰好一次）：
+    1. 對話檔接上 `<turn-summary N · HH:MM | title>` 與內文（N＝`dlg_turns.turn_no`，HH:MM＝`turn_at` 的本地時間），用 writer 的 session 鎖；
+    2. 喚醒推播等待；
+    3. `since_recap ≥ 30` 時排一個 recap（T10）。
+  - `finish`：只把仍是 pending 的那筆改成 skipped／failed 與 reason，並喚醒推播等待（讓它立刻回 false）。
 - 推播等待：基準的 `lines.go` 與 `lines_test.go` **整檔搬入**，只把 store 換成查 `dlg_summaries` 的介面（`ClosestTurn`：`turn_at` 在 [since−2000, since+500]，取最近）。其餘不改，包括：
   - intake 窗口 `intakeBeforeMS=1500`；
   - 每 session 最多 8 個 intake 時間、最多 64 個 session；
@@ -295,7 +301,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 
 ### T10. recap
 
-- store migration 3：`dlg_recaps(id PK, session_id, conv_key, at, from_no, to_no, trigger, headline, body_json, usage_in, usage_out, latency_ms, created_at)`，索引 `(session_id, id)`。
+- store migration 3：`dlg_recaps(id PK, job_id UNIQUE, session_id, conv_key, at, from_no, to_no, trigger, headline, body_json, usage_in, usage_out, latency_ms, created_at)`，索引 `(session_id, id)`。
 - 觸發（spec §4）：
   1. 回合摘要寫入後 `since_recap ≥ 30`；
   2. App 打開或手動：`POST /api/dialogue/{sid}/recap`（T11）。
@@ -306,9 +312,12 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
   - 六欄必填：`headline` 字串、`done` 陣列、`now` 字串、`decided` 陣列、`waiting` 陣列、`next` 字串；
   - `headline` 截 60 字；`done` 超過 6 條取前 6 條；每條截 40 字；`now` 截 80 字；`next` 截 60 字；全部先 `redact.String`；
   - 格式錯重試一次。
-- 寫入（一個交易）：新增 `dlg_recaps`、`since_recap = 0`。交易成功後：
-  1. 對話檔接上 `<recap HH:MM | turns a–b>` 與結構化內文（格式見 spec §2.2 範例，欄名英文、內文繁中）；
-  2. 廣播 host 事件 `dialogue.recap`，值 `{"session_id","recap_id"}`。
+- 寫入照 T8 的兩段契約：
+  - `apply`（一個交易）：以 job id 為唯一鍵新增 `dlg_recaps`（`job_id` 欄位 UNIQUE，已存在就回 nil、什麼都不做），同交易 `since_recap = 0`；
+  - `after`（恰好一次）：
+    1. 對話檔接上 `<recap HH:MM | turns a–b>` 與結構化內文（格式見 spec §2.2 範例，欄名英文、內文繁中；空的清單與空的 now／next 整段省略）；
+    2. 廣播 host 事件 `dialogue.recap`，值 `{"session_id","recap_id"}`；
+  - `finish`：recap 沒有預先建立的列，只需清掉「這個 session 有 recap 在排隊或執行中」的記錄，讓下次觸發能再排。
 - 換段時 writer 的 `Carried` 接點回傳這個 session 最新一則 recap 的文字，寫在新段的 `<carried recap HH:MM | turns a–b>` 之下（spec §2.2）。
 - 失敗（模型沒回、格式錯兩次）：不寫、計數不歸零，下一則摘要寫入時會再觸發。
 - 測試清單：
@@ -324,9 +333,10 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 ### T11. API、capability、裝置白名單
 
 - 路由（dialogue 模組註冊在 core 的 mux，樣式照工作簿的 `api.go:152-157`）：
-  - `GET /api/dialogue/{session_id}/recaps?limit=`：新到舊，預設 20、上限 100；每則 `{id, at, from_no, to_no, trigger, headline, done, now, decided, waiting, next}`；
-  - `GET /api/dialogue/{session_id}/turn-summaries?from=&to=`：依回合編號，舊到新，一次最多 100 則；每則 `{turn_no, at, title, summary, push, state}`；
-  - `POST /api/dialogue/{session_id}/recap`：回 `{"state":"queued"|"up_to_date"|"unavailable"}`。
+  - `GET /api/dialogue/{session_id}/recaps?limit=`：新到舊，預設 20、上限 100；回 `{"recaps":[…], "can_generate", "newest_turn_no", "last_recap_to_no"}`，每則 `{id, at, from_no, to_no, trigger, headline, done, now, decided, waiting, next}`（清單空的回 `[]`）。三個附帶欄位給 App 判斷「產生中／已是最新／session 已結束」：`can_generate`＝session 現在能接 job，`newest_turn_no`＝最新 done 回合摘要的編號，`last_recap_to_no`＝最新 recap 的 `to_no`（沒有都是 0）；
+  - `GET /api/dialogue/{session_id}/turn-summaries?from=&to=&limit=`：只回 done 的，依回合編號舊到新，回 `{"turn_summaries":[…]}`，每則 `{turn_no, at, title, summary, push}`；可只給 `from`（最後一則 recap 之後的回合）、只給 `limit`（最新幾則），limit 預設與上限 100；範圍超過上限時回範圍內最新的 100 則；
+  - `POST /api/dialogue/{session_id}/recap`：body `{"trigger":"open"|"manual"}`，可省略（＝manual）；回 `{"state":"queued"|"up_to_date"|"unavailable"}`。
+  - （寫 T11 時依原型的兩個待決題加了 `limit`、只給 `from` 與三個附帶欄位；PR 2 合併前審查後 POST body 改成可省略。）
 - session_id 格式不合回 400；模組沒就緒回 503。
 - `/api/info`：dialogue 模組 ready 時宣告 `dialogue.v1`。測試要用真的模組註冊再打 `/api/info`（不是替身）。
 - `cmd/pdx/device_scope.go`：三條路由加進白名單（T7 已拿掉舊的）。

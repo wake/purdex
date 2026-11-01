@@ -79,17 +79,10 @@ var deviceAllowed = map[string]bool{
 	"PUT /api/devices/self": true,
 	// agent upload: the iOS deck / chat attachments (the phone sends inject=0 and carries the returned path in its own message)
 	"POST /api/agent/upload": true,
-	// session workbook: read-only
-	"GET /api/workbook/conversations/{provider}/{session_id}":       true,
-	"GET /api/workbook/entries":                                     true,
-	"GET /api/workbook/conversations/{provider}/{session_id}/todos": true,
-	// the workbook journal: a unit's entries, tasks and roadmap, and the hand check of a 待確認 item (iOS later; the same trust as the workbook reads)
-	"GET /api/journal":         true,
-	"GET /api/journal/tasks":   true,
-	"GET /api/journal/roadmap": true,
-	"PUT /api/journal/confirm": true,
-	// the team members' status lines (journal.members.v1): read-only
-	"GET /api/journal/members": true,
+	// dialogue: the recap view (recaps, the turn summaries behind them, and the request for a fresh recap)
+	"GET /api/dialogue/{session_id}/recaps":         true,
+	"GET /api/dialogue/{session_id}/turn-summaries": true,
+	"POST /api/dialogue/{session_id}/recap":         true,
 }
 
 // nexEnginePattern is the one pattern that mounts the whole embedded engine; for a device the scope looks past the pattern.

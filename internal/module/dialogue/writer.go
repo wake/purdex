@@ -64,6 +64,40 @@ type Writer struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// placed: per session, the first lines of the blocks the current rebuild put into the file through Placed (memory only;
+	// the race it closes lives inside one process). AppendMarker skips a block whose first line is in it.
+	placed map[string]map[string]bool
+}
+
+func (w *Writer) resetPlaced(sid string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.placed, sid)
+}
+
+func (w *Writer) notePlaced(sid, block string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.placed == nil {
+		w.placed = map[string]map[string]bool{}
+	}
+	if w.placed[sid] == nil {
+		w.placed[sid] = map[string]bool{}
+	}
+	w.placed[sid][blockHead(block)] = true
+}
+
+func (w *Writer) wasPlaced(sid, block string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.placed[sid][blockHead(block)]
+}
+
+func blockHead(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // Option configures a Writer.
@@ -183,6 +217,84 @@ func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string,
 	return w.run(sid, res, target, force, &st)
 }
 
+// AppendMarker puts one block (a turn summary, T9; PR 2's recap uses it too) at the end of the session's current segment,
+// set off by a blank line, and records the new size so the next Write does not take it for crash residue. The cursor is
+// not moved. It does nothing (logged) for a session with no file yet, a file shorter than recorded (the next Write
+// rebuilds and Placed puts the block back) and a session being rebuilt that has not written turn turnNo yet (the rebuild's
+// Placed covers it). turnNo is the number of the turn the block belongs to (a recap passes its to_no).
+//
+// If the Commit at the end fails the file is longer than recorded, and the next Write cuts the block off: the summary is
+// still in the database and the next rebuild puts it back (a trade-off, not retried here).
+func (w *Writer) AppendMarker(sid string, turnNo int, text string) error {
+	if _, err := w.sessionDir(sid); err != nil {
+		return err
+	}
+	l := w.lockFor(sid)
+	l.Lock()
+	defer l.Unlock()
+
+	if w.wasPlaced(sid, text) {
+		w.log("[dialogue] session %s: a rebuild already put %q into the file: a marker is not appended", sid, blockHead(text))
+		return nil
+	}
+	st, has, err := w.store.Session(sid)
+	if err != nil {
+		return err
+	}
+	if !has || st.SegBytes == 0 {
+		w.log("[dialogue] session %s has no segment yet: a marker is not appended", sid)
+		return nil
+	}
+	if st.Rebuilding {
+		// A rebuild that stopped at its target stays marked until a later Write reaches the end. A block of a turn the
+		// rebuild has written already (its number is at most the cursor turn's) goes to the end of the file as usual; one
+		// of a turn not reached yet is left, and Placed puts it in when that turn is written.
+		cursorNo, found, err := w.store.TurnNo(sid, st.CursorTurn)
+		if err != nil {
+			return err
+		}
+		if st.CursorTurn == "" || !found || turnNo > cursorNo {
+			w.log("[dialogue] session %s is being rebuilt and has not reached turn %d: a marker is left to the rebuild", sid, turnNo)
+			return nil
+		}
+	}
+	path := w.segPath(sid, st.Segment)
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.log("[dialogue] session %s: segment %d is gone: a marker is not appended", sid, st.Segment)
+			return nil
+		}
+		return fmt.Errorf("stat dialogue segment: %w", err)
+	}
+	if fi.Size() < st.SegBytes {
+		w.log("[dialogue] session %s: segment %d is shorter than recorded: a marker is not appended", sid, st.Segment)
+		return nil
+	}
+	if fi.Size() > st.SegBytes { // bytes written but never committed (a crash): cut them off, as Write does
+		if err := os.Truncate(path, st.SegBytes); err != nil {
+			return fmt.Errorf("repair dialogue segment: %w", err)
+		}
+	}
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	block := "\n" + text
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, fileMode)
+	if err != nil {
+		return fmt.Errorf("append dialogue segment: %w", err)
+	}
+	_, err = f.WriteString(block)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("append dialogue segment: %w", err)
+	}
+	st.SegBytes += int64(len(block))
+	return w.store.Commit(sid, st, nil)
+}
+
 func (w *Writer) removeSegments(sid string) error {
 	matches, _ := filepath.Glob(filepath.Join(w.root, sid, "*.md"))
 	for _, m := range matches {
@@ -225,6 +337,7 @@ func (w *Writer) needsRebuild(sid string, st SessionState, res convturns.TurnsFr
 
 func (w *Writer) rebuild(sid string, old SessionState, res convturns.TurnsFromResult, target string, force bool) (WriteResult, error) {
 	// Reset first (this sets the flag, so a crash from here on is still a rebuild), then the files, then the rewrite.
+	w.resetPlaced(sid)
 	if err := w.store.ResetForRebuild(sid); err != nil {
 		return WriteResult{}, err
 	}
@@ -460,6 +573,7 @@ func (r *runner) writeTurn(t convmodel.Turn, items []convmodel.Item) (WrittenTur
 			if err := r.text(s); err != nil {
 				return WrittenTurn{}, false, err
 			}
+			r.w.notePlaced(r.sid, s)
 		}
 	}
 	ended := t.StartedAt

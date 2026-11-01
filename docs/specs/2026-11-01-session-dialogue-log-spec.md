@@ -62,7 +62,7 @@ next: ……
 |---|---|---|
 | `<prev: …>` | 每段第一行 | 前一段的路徑。第一段寫接力前那個 session 的最後一段；沒有前任寫 `<prev: none>` |
 | `<source: …>` | 每段第二行 | 原始 transcript 路徑 |
-| `<carried recap …>` | 第二段起 | 上一段最後一則 recap 的原文，讓每段能單獨讀懂；上一段沒有 recap 就省略 |
+| `<carried recap …>` | 第二段起 | 到上一段結束為止最新的一則 recap 原文，讓每段能單獨讀懂；整個 session 還沒有 recap 就省略 |
 | `user:` | 你打的訊息，以及排隊送出的訊息 | 全文；附圖時另起一行 `<image ×N>` |
 | `peer(<名字>):` | 其他 session 傳來的訊息 | 全文 |
 | `scheduled:` | 排程送來的訊息 | 全文 |
@@ -146,8 +146,9 @@ next: ……
 - 日誌卡片、確認帶、任務卡、路線圖卡拿掉。
 - 新 API：
   - `GET /api/dialogue/{session_id}/recaps`
-  - `GET /api/dialogue/{session_id}/turn-summaries?from=&to=`
+  - `GET /api/dialogue/{session_id}/turn-summaries?from=&to=&limit=`
   - `POST /api/dialogue/{session_id}/recap`（手動或打開時更新）
+  - 回應形狀見 plan T11。
   - WS 事件 `dialogue.recap`
 - 介面細節先做原型給你看，確認後才實作。
 

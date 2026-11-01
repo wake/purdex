@@ -322,15 +322,6 @@ func (c Config) Clone() Config {
 		p := *c.Push
 		out.Push = &p
 	}
-	if c.Journal != nil {
-		j := *c.Journal
-		j.PushProjects = slices.Clone(c.Journal.PushProjects)
-		if c.Journal.Enabled != nil {
-			on := *c.Journal.Enabled
-			j.Enabled = &on
-		}
-		out.Journal = &j
-	}
 	if c.Watch != nil {
 		w := *c.Watch
 		out.Watch = &w
@@ -356,8 +347,6 @@ type Config struct {
 	Peers        PeersConfig    `toml:"peers"          json:"peers"`
 	Nex          NexConfig      `toml:"nex"            json:"nex"`
 	Push         *PushConfig    `toml:"push,omitempty" json:"push,omitempty"`
-	// Journal is a pointer for the reason Push is: a config without the section is written back without one.
-	Journal *JournalConfig `toml:"journal,omitempty" json:"journal,omitempty"`
 	// Watch is the [watch] section (the source of the watcher's wake settings); a pointer for the same reason.
 	Watch *WatchConfig `toml:"watch,omitempty" json:"watch,omitempty"`
 

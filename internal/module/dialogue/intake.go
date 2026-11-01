@@ -36,8 +36,9 @@ type intakeDeps struct {
 	writer *Writer
 	store  *Store
 	logf   func(format string, args ...any) // nil: silent
-	// onWritten runs after a successful Write (even one that had nothing new to write). hookText is the Stop hook's own
-	// text: PR 2's turn summary falls back on it when the transcript has not caught up. Runs before onSettled.
+	// onWritten runs after a successful Write (even one that had nothing new to write). res.Turns holds every turn in hand
+	// at any Write of the event (not only those of the last read). hookText is the Stop hook's own
+	// text: the turn summary falls back on it when the transcript has not caught up. Runs before onSettled.
 	onWritten func(ev agentmod.TurnEndEvent, res convturns.TurnsFromResult, wr WriteResult, targetID, hookText string)
 	// onSettled runs once for every event, however it ended (written, nothing to write, an error, dropped, abandoned
 	// by Stop). PR 2 tells the push hold "this session was looked at" there.
@@ -230,6 +231,21 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 		return
 	}
 	var acc WriteResult // what every Write of this event did, handed to onWritten
+	// The turns in hand at every Write, by first appearance with the content of the newest read: a re-read starts later in
+	// the conversation (the cursor moved), so the turns an earlier Write wrote are not in the last res.
+	var seen []convmodel.Turn
+	seenAt := map[string]int{}
+	remember := func(ts []convmodel.Turn) {
+		for _, t := range ts {
+			if i, ok := seenAt[t.ID]; ok {
+				seen[i] = t
+			} else {
+				seenAt[t.ID] = len(seen)
+				seen = append(seen, t)
+			}
+		}
+	}
+	forcedID := "" // the running newest turn a forced write wrote for a Stop the transcript never caught up with
 	// The waits for the transcript and for running tools share one allowance of settleRetries (plan §1-7, §1-8: deliberate).
 	tries := 0
 	force := false
@@ -255,6 +271,9 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 			// a guess (pinning it to the newest turn would hand later Stops' turns to this one).
 			force = true
 			target = -1
+			if n := len(res.Turns); n > 0 {
+				forcedID = res.Turns[n-1].ID // findTarget's "not caught up" is about the newest turn
+			}
 			in.log("[dialogue] session %s: the transcript had not caught up with a Stop after %d waits; written as it is", sid, settleRetries)
 		}
 		targetID := ""
@@ -281,6 +300,7 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 			in.log("[dialogue] write session %s: %v", sid, err)
 			return
 		}
+		remember(res.Turns)
 		acc.Turns = append(acc.Turns, wr.Turns...)
 		acc.First = acc.First || wr.First
 		acc.Rebuilt = acc.Rebuilt || wr.Rebuilt
@@ -298,7 +318,20 @@ func (in *intake) handle(ev agentmod.TurnEndEvent) {
 			continue
 		}
 		if in.d.onWritten != nil {
-			in.d.onWritten(ev, res, acc, targetID, ev.Text)
+			// A forced write wrote the Stop's own turn (the running newest one): it is the event's turn now, and the
+			// summary falls back on the hook's text (plan §1-8). Write itself was given no target.
+			cbTarget := targetID
+			if cbTarget == "" && forcedID != "" {
+				for _, wt := range acc.Turns {
+					if wt.ID == forcedID {
+						cbTarget = forcedID
+						break
+					}
+				}
+			}
+			merged := res
+			merged.Turns = seen
+			in.d.onWritten(ev, merged, acc, cbTarget, ev.Text)
 		}
 		return
 	}
