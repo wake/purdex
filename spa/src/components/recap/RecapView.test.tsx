@@ -213,6 +213,22 @@ describe('RecapView: the status line and the regenerate button', () => {
   })
 })
 
+describe('RecapView: a failed re-read after a dialogue.recap event', () => {
+  it('shows the read-failed line once the retries give up, with the old recaps still listed', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchRecaps.mockResolvedValueOnce(resp([recap(1)]))
+      mount()
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      fetchRecaps.mockRejectedValue(new Error('down'))
+      act(() => { useDialogueStore.getState().applyRecapEvent('h1', JSON.stringify({ session_id: 'S1', recap_id: 2 })) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(7000) })
+      expect(screen.getByTestId('recap-status')).toHaveTextContent('讀不到 recap')
+      expect(screen.getAllByTestId('recap-item')).toHaveLength(1)
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('RecapView: the turns after the newest recap (decision 2 = B)', () => {
   it('lists them above the recaps, open at first, newest first, and folds on a click', async () => {
     fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33 }))

@@ -64,6 +64,7 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
   let tone: 'ok' | 'acc' | 'mut' = 'mut'
   let can = false
   if (generating) { status = <><ArrowsClockwise size={11} className="animate-spin mt-0.5 flex-shrink-0" /><span>{t('recap.status.generating')}</span></>; tip = t('recap.regen.tip.generating') }
+  else if (entry?.loadFailed === true) { status = <span>{t('recap.status.load_failed')}</span>; tip = '' }
   else if (recaps === null) { status = <span>{failed ? t('recap.status.load_failed') : t('recap.status.loading')}</span>; tip = '' }
   else if (!canGenerate) { status = <span>{t('recap.status.ended')}</span>; tip = t('recap.regen.tip.ended') }
   else if (newest === 0) { status = <span>{t('recap.status.no_turns')}</span>; tip = t('recap.regen.tip.no_turns') }
