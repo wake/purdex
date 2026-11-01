@@ -9,7 +9,6 @@ import type { TeamSeatView } from './team-display'
 import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { clearModuleRegistry } from '../../lib/module-registry'
@@ -36,7 +35,6 @@ beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
-  useWorkbookStore.getState().reset()
   useTeamUiStore.setState({ panel: { width: 412 }, teamDrill: {}, endedSeats: {} })
   clearModuleRegistry()
   useShownHostsStore.setState({ ids: [HOST] })

@@ -1,20 +1,17 @@
 // spa/src/components/team/TeamPanelArea.tsx — the one panel area, mounted once by the shell (team spec §4.4 amended, WA-2a).
 //
 // A floating layer over the top-right of the pane area (the shell's content box is `relative`): the panes keep their
-// size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`), or that team's
-// drilled-in seat workbook in the same frame; a tab of no team that shows an agent session gets the personal panel (task groups spec §7), in the
+// size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`); a tab of no team that shows an agent session gets the personal panel (task groups spec §7), in the
 // one value all such tabs share. Everything the person arranged lives in `useTeamUiStore` (width, and per team one of three
 // states: titlebar | line | full), so a tab switch that unmounts the pane and a reload both come back to the same
 // area. In the `titlebar` state the pane draws nothing: the strip in the title bar (TeamTitleStrip) is the area.
 //
 // Resize: the LEFT edge, draft-then-commit (the ActivityBarWide pattern): a drag only moves the draft width (usePanelDraftStore: plain, not
-// persisted, so a mousemove costs no storage work), which the journal cards read too so they follow the edge live, and the persisted width is written once on mouseup. The area never calls focus(): the terminal keeps the keyboard.
+// persisted, so a mousemove costs no storage work), and the persisted width is written once on mouseup. The area never calls focus(): the terminal keeps the keyboard.
 import { useEffect, useRef } from 'react'
 import { RegionResize } from '../RegionResize'
 import { useTabStore } from '../../stores/useTabStore'
 import { PANEL_MAX_WIDTH, currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
-import { useJournalTarget } from '../journal/useJournalTarget'
-import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { usePanelDraftStore } from '../../stores/usePanelDraftStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamDisplay } from './team-display'
@@ -28,19 +25,11 @@ export function TeamPanelArea() {
   const t = useI18nStore((s) => s.t)
   const display = useTeamDisplay()
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const teamDrill = useTeamUiStore((s) => s.teamDrill)
   const personal = usePersonalTarget()
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
   const panelTeam = display ? display.panelTeam(activeTabId) : null
-  // On a journal.v1 host (J-2b) the workbook view stays off: no drill into a seat's workbook. Either host decides: the tab's own host (its cc
-  // session) or the team's lead host. `useJournalTarget().journalHost` is the host the unit is READ from, which a follow route moves to
-  // the lead's, so it cannot stand for the tab's own.
-  const originHost = useJournalTarget().origin?.hostId ?? ''
-  const tabJournal = useIsJournalHost(originHost)
-  const leadJournal = useIsJournalHost(panelTeam?.lead.hostId ?? '')
-  const noDrill = tabJournal || leadJournal
-  const view0 = panelView({ panelTeam, teamDrill, personal, journalHost: noDrill })
-  // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
+  const view0 = panelView({ panelTeam, personal })
+  // The team the area draws a frame for: the team view.
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
   // A tab of no team shows the personal panel in the one value all such tabs share.
   const mode = shownTeam ? shownTeam.mode : view0 !== null ? sharedMode : null
@@ -52,8 +41,7 @@ export function TeamPanelArea() {
     if (hidden) { draftRef.current = null; usePanelDraftStore.getState().setDraft(null) }
   }, [hidden])
   useEffect(() => () => { draftRef.current = null; usePanelDraftStore.getState().setDraft(null) }, [])
-  const drilled = shownTeam !== null && !noDrill && teamDrill[shownTeam.teamKey] != null
-  const shownWidth = useShownPanelWidth(shownTeam, drilled, view0 !== null && view0.kind === 'personal' && mode === 'line')
+  const shownWidth = useShownPanelWidth(shownTeam, view0 !== null && view0.kind === 'personal' && mode === 'line')
   if (hidden) return null
   const paneMode = mode
 
@@ -88,7 +76,6 @@ export function TeamPanelArea() {
             team={shownTeam}
             activeTabId={activeTabId}
             width={shownWidth}
-            noDrill={noDrill}
             onSetMode={(m) => useTeamUiStore.getState().setPanelMode(shownTeam.teamKey, m)}
             onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}
             onReorder={(ids) => display.onReorderMembers(shownTeam.teamKey, ids)}

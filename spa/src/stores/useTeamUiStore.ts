@@ -37,7 +37,7 @@ interface Slices {
   /** Per team key, the pane state the area left when it went to the title bar; absent = `full`. */
   panelLast: Record<string, PaneMode>
   ghostWorkspace: Record<string, string>
-  /** Per team key, the seat whose workbook the panel area shows in place of the team view (WA-2b writes it). */
+  /** Per team key, a seat the panel area once drilled into (no view reads it since the workbook was removed). */
   teamDrill: Record<string, DrillSeat>
   /** Per team key, the seats that left the team's roster on a frame from a connected host: newest first, at most ENDED_SEATS_MAX (WA-2b-1). */
   endedSeats: Record<string, EndedSeat[]>

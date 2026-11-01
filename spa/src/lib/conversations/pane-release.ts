@@ -13,7 +13,6 @@
 //   fold         (fold-memory)             deck: pane\0session   chat: pane\0host\0session releasePane, retireStaleSessions
 //   scroll       (transcript-scroll-memory) deck: pane\0session   chat: pane\0host\0session\0chat   releasePane, retireStaleSessions
 //   deck panes   (fold-memory `shown`)     pane                                          releasePane
-//   workbook view (workbook/view-memory)   not a session pane's: its own LRU, untouched
 //
 // "Gone for good" is: the pane is in NO world any more — not on screen and not parked in the master's or a slave's world (a
 // profile switch swaps the live tabs and parks the old ones; a failed switch is rolled back; neither kills a pane) and not in a

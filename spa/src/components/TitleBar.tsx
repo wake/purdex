@@ -15,8 +15,6 @@ import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
 import { UnattendedButton } from './UnattendedButton'
 import { PersonalButton, PersonalTitleStrip, TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
 import { usePersonalRootsInterest, usePersonalTarget } from './team/usePersonalPanel'
-import { JournalButtons } from './journal/JournalButtons'
-import { useJournalTarget } from './journal/useJournalTarget'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTitleBarLayout } from './team/title-bar-layout'
 import { useTitleBarTeam } from './team/useTitleBarTeam'
@@ -114,9 +112,6 @@ export function TitleBar({ title }: Props) {
   const personal = usePersonalTarget()
   usePersonalRootsInterest(personal)
   const sharedInBar = useTeamUiStore((s) => s.sharedPanelMode === 'titlebar')
-  // On a journal.v1 host 團隊 / 個人 and 工作簿 take the notebook button's place
-  // (JV-2: the team's strip is back on every host, the 團隊 button moves the panel between the pane and the title bar).
-  const jt = useJournalTarget()
   const personalStrip = team === null && personal !== null && sharedInBar
   const stripShown = team ? team.mode === 'titlebar' : personalStrip
   const { barRef, btnsRef, setStripW, layout } = useTitleBarLayout(stripShown)
@@ -201,7 +196,7 @@ export function TitleBar({ title }: Props) {
         {personalStrip && personal && <PersonalTitleStrip target={personal} room={layout ? layout.room : null} onContentWidth={setStripW} />}
         <div ref={btnsRef} data-testid="title-bar-right" className="shrink-0 flex items-center">
         {/* Notebook (WA-2a′) / 個人: moves the panel area between the title bar and the pane; a team tab, or a tab that shows an agent session. */}
-        {jt.journalHost ? <JournalButtons target={jt} /> : team ? <TeamNotebookButton team={team} /> : personal && <PersonalButton />}
+        {team ? <TeamNotebookButton team={team} /> : personal && <PersonalButton />}
         {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
         <UnattendedButton />
         <div

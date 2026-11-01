@@ -1,6 +1,5 @@
 // spa/src/components/team/PersonalCard.tsx — the personal panel's card (task groups spec §7, TG-5c; design R12–R15): the lead row's look for one session — 44 px avatar, agent icon with its light, host, name, title, context left with
-// its ring, the workbook button — and the last status line as the second line. The card is always the "active" row: it is the tab in view, so a click on it does nothing.
-import { Notebook } from '@phosphor-icons/react'
+// its ring — and, later, the latest recap as the second line. The card is always the "active" row: it is the tab in view, so a click on it does nothing.
 import { Avatar } from '../Avatar'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
@@ -8,21 +7,18 @@ import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { TeamSeatLight } from './TeamSeatLight'
 import { SEAT_LIGHT_POSITION } from '../overlay-dot'
 import { ctxLeftText, ctxTip } from './team-readings'
-import { usePersonalNames, usePersonalReading, usePersonalStatusLine } from './usePersonalPanel'
+import { usePersonalNames, usePersonalReading } from './usePersonalPanel'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PersonalTarget } from '../../lib/task-groups/personal'
 
 interface Props {
   target: PersonalTarget
-  /** The workbook button, when the session has a workbook: it opens the journal card (journal.v1 host) or the workbook inside the panel (older host). */
-  workbook: { open: boolean; onToggle: () => void } | null
 }
 
-export function PersonalCard({ target, workbook }: Props) {
+export function PersonalCard({ target }: Props) {
   const t = useI18nStore((s) => s.t)
   const { name, title, persona } = usePersonalNames(target)
   const r = usePersonalReading(target)
-  const line = usePersonalStatusLine(target)
   const ended = target.ended
   const ctx = ended ? undefined : r.ctx
   const model = ended ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
@@ -54,26 +50,8 @@ export function PersonalCard({ target, workbook }: Props) {
             <span data-testid="personal-card-ctx" className="text-[10.5px] tabular-nums text-text-muted">{ctxLeftText(ctx)}</span>
             <ContextRing pct={ctx} model={ended ? undefined : r.model} size={16} />
           </span>
-          {workbook && (
-            <button
-              type="button"
-              data-testid="personal-card-workbook"
-              aria-pressed={workbook.open}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={workbook.onToggle}
-              title={t('team.panel.workbook')}
-              aria-label={t('team.panel.workbook')}
-              className={`p-0.5 rounded hover:text-text-primary hover:bg-surface-hover cursor-pointer flex-shrink-0 ${workbook.open ? 'text-text-primary' : 'text-text-secondary'}`}
-            >
-              <Notebook size={14} weight={workbook.open ? 'fill' : 'regular'} />
-            </button>
-          )}
         </div>
-        {line !== '' && (
-          <div data-testid="personal-card-line" title={line} className="mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
-            {ended ? t('personal.last', { line }) : line}
-          </div>
-        )}
+        {/* T14: the latest recap headline goes here (the card's second line). */}
       </div>
     </div>
   )

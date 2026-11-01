@@ -12,7 +12,7 @@ import { labelOf, seatHostOf, teamKeyOf } from './team-views'
 
 interface SeatMark { hostId: string; title: string; address: string }
 
-/** The seats of `team` this Mac can name a host for, by session id (a seat on a host it cannot name has no workbook to open). */
+/** The seats of `team` this Mac can name a host for, by session id. */
 function seatsOf(team: TeamRoster, frameHostId: string, hostMap: Record<string, string>): Map<string, SeatMark> {
   const out = new Map<string, SeatMark>()
   for (const session of [team.lead, ...team.members]) {

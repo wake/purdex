@@ -46,7 +46,7 @@ import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelay
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
 import { submitDecision, subscribeNameTaken } from '../lib/team/approval-decide'
 import { parseOriginTmux } from '../lib/team/approval-goto'
-import { RelayBrief, RelayTitle } from './approval/RelayBrief'
+import { RelayTitle } from './approval/RelayBrief'
 
 
 export function ApprovalDialogHost() {
@@ -425,8 +425,6 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
               </>
             )}
           </dl>
-          {isSelfRelay && <RelayBrief hostId={hostId} sessionId={approval.origin.session_id} />}
-          {isMemberRelay && <RelayBrief hostId={hostId} sessionId={memberRelay.payload.member_session_id} />}
           {isAdopt ? (
             <p data-testid="approval-adopt-note" className="mt-3 text-xs text-text-secondary">{adopt.target_host_id !== '' ? t('approval.dialog.adopt_note_remote', { alias: adoptionAlias(adopt) }) : t('approval.dialog.adopt_note')}</p>
           ) : isMemberRelay ? (
