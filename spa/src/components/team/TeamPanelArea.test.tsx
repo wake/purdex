@@ -93,6 +93,14 @@ describe('typeface', () => {
   })
 })
 
+describe('text tiers', () => {
+  it('the panel remaps the two quieter text tiers for everything inside it (themes.css .panel-text-tiers)', () => {
+    scene()
+    mount()
+    expect(area().className).toMatch(/\bpanel-text-tiers\b/)
+  })
+})
+
 describe('full mode', () => {
   // A browser moves focus to the focusable row unless mousedown is default-prevented; jsdom does not, so do it by hand.
   const pressRow = (row: HTMLElement) => { if (fireEvent.mouseDown(row)) row.focus() }

@@ -134,6 +134,16 @@ describe('double-click the name', () => {
     expect(screen.getByTestId('team-edit-color-auto').getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('the form is portalled out of the panel area, so it carries the panel\'s text tiers itself', () => {
+    scene()
+    setEdit('yes')
+    mount()
+    dblClickName()
+    advance(NAME_CLICK_DELAY_MS * 3)
+    expect(popover()!.parentElement).toBe(document.body)
+    expect(popover()!.className).toMatch(/\bpanel-text-tiers\b/)
+  })
+
   it('a host without team.edit.v1 gets no form', () => {
     scene()
     setEdit('no')

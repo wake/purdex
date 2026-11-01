@@ -170,3 +170,13 @@
   --queue-heavy: #bd93f9;
   --queue-light: #8be9fd;
 }
+
+/* The panel area (TeamPanelArea: the team and personal panels, the recap history) reads its two quieter text tiers brighter than the rest
+   of the App (2026-11-02: at 9.5-11 px the theme's own muted, 3.3:1 on the dark panel, was too dim to read). Each tier is mixed toward the
+   theme's text-primary, so every theme, a custom one too, follows; primary stays the brightest. Dark, on --surface-elevated: secondary
+   6.3 -> 8.6:1, muted 3.3 -> 6.8:1. Only this class changes them: everything outside the area keeps the theme's tiers. A layer the panel
+   portals out of the area (TeamEditPopover, under body) carries the class itself. */
+.panel-text-tiers {
+  --color-text-secondary: color-mix(in srgb, var(--text-secondary) 55%, var(--text-primary));
+  --color-text-muted: color-mix(in srgb, var(--text-muted) 50%, var(--text-primary));
+}

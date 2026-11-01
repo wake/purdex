@@ -53,7 +53,7 @@ export function TeamPanelArea() {
   return (
     <div
       data-testid="team-panel-area"
-      className="absolute z-20 flex font-sans top-0 right-3 max-h-[calc(100%-12px)]"
+      className="absolute z-20 flex font-sans panel-text-tiers top-0 right-3 max-h-[calc(100%-12px)]"
       style={{ width: shownWidth }}
     >
       <div className="absolute inset-y-0 left-0 z-10 flex" title={t('team.panel.resize')}>

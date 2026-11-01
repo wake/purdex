@@ -140,7 +140,7 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
       aria-label={t('team.edit.title')}
       data-testid="team-edit-popover"
       onKeyDown={onKeyDown}
-      className="fixed z-50 flex flex-col gap-2 p-2.5 rounded-lg border border-border-default bg-surface-elevated shadow-xl text-xs text-text-primary font-sans"
+      className="fixed z-50 flex flex-col gap-2 p-2.5 rounded-lg border border-border-default bg-surface-elevated shadow-xl text-xs text-text-primary font-sans panel-text-tiers"
       style={{ width: POPOVER_W }}
     >
       <label className="flex flex-col gap-1">
