@@ -152,3 +152,26 @@ func TestStoreFilePermissions(t *testing.T) {
 		}
 	}
 }
+
+// A file left with wider permissions (an older build, a copy) is restricted again when it is opened.
+func TestOpenStoreRestrictsAnExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dialogue.db")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { // WriteFile's mode is cut by the umask
+		t.Fatal(err)
+	}
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", fi.Mode().Perm())
+	}
+}
