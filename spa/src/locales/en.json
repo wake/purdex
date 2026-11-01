@@ -3388,7 +3388,7 @@
   "recap.regen.tip.generating": "Generating",
   "recap.regen.tip.ended": "The session has ended; no new recap can be made",
   "recap.regen.tip.no_turns": "No turn summaries yet",
-  "recap.regen.tip.newer": "Make a new recap from the latest turn summaries",
+  "recap.regen.tip.newer": "Make a new recap from the latest 30 turn summaries",
   "recap.regen.tip.latest": "Up to date: there are no new turn summaries",
   "recap.status.generating": "Writing a new recap",
   "recap.status.ended": "The session has ended; no new recap can be made",
@@ -3416,7 +3416,7 @@
   "recap.generating.title": "Writing a recap",
   "recap.empty.title": "No recap yet",
   "recap.empty.ended": "This session left no recap.",
-  "recap.empty.no_turns": "Once the first turn is done and summarized, opening this makes the first recap; after that one is made automatically as turn summaries pile up.",
+  "recap.empty.no_turns": "Once the first turn is done and summarized, opening this makes the first recap; after that one is made automatically for every 30 turn summaries.",
   "recap.empty.press": "Press Regenerate to make the first one.",
   "team.panel.ended": "Ended ({{count}})",
   "team.panel.ended_hint": "Ended - click to see its recap"

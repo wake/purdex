@@ -3388,7 +3388,7 @@
   "recap.regen.tip.generating": "產生中",
   "recap.regen.tip.ended": "session 已結束，無法產生新的 recap",
   "recap.regen.tip.no_turns": "還沒有回合摘要",
-  "recap.regen.tip.newer": "用最近的回合摘要產生一則新的 recap",
+  "recap.regen.tip.newer": "用最近 30 則回合摘要產生一則新的 recap",
   "recap.regen.tip.latest": "已是最新：沒有新的回合摘要",
   "recap.status.generating": "正在產生新的 recap",
   "recap.status.ended": "session 已結束，無法產生新的 recap",
@@ -3416,7 +3416,7 @@
   "recap.generating.title": "正在產生 recap",
   "recap.empty.title": "還沒有 recap",
   "recap.empty.ended": "這個 session 沒有留下 recap。",
-  "recap.empty.no_turns": "做完第一個回合、寫出回合摘要後，打開這裡就會產生第一則；之後每累積一批回合摘要會自動產生一則。",
+  "recap.empty.no_turns": "做完第一個回合、寫出回合摘要後，打開這裡就會產生第一則；之後每累積 30 則回合摘要自動產生一則。",
   "recap.empty.press": "按「重新產生」產生第一則。",
   "team.panel.ended": "已結束 ({{count}})",
   "team.panel.ended_hint": "已結束，點一下看 recap"
