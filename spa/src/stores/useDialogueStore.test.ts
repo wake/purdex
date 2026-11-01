@@ -259,3 +259,38 @@ describe('connection fence (setSupport(false) drops what is still out)', () => {
     expect(entry('h2')?.generating).toBe(true)
   })
 })
+
+describe('loadRecaps out-of-order answers', () => {
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
+
+  it('a limit=1 answer that lands after the full one does not shrink the history, and the counts come from the later request', async () => {
+    const slow = deferred<RecapsResponse>()
+    const full = deferred<RecapsResponse>()
+    fetchRecaps.mockReturnValueOnce(slow.promise).mockReturnValueOnce(full.promise)
+    const pSlow = st().loadRecaps('h1', 'S1', 1)
+    const pFull = st().loadRecaps('h1', 'S1')
+    full.resolve(resp([recap(3), recap(2), recap(1)], { newest_turn_no: 20, can_generate: false }))
+    await pFull
+    slow.resolve(resp([recap(2)], { newest_turn_no: 10, can_generate: true }))
+    await pSlow
+    const r = entry()?.recaps
+    expect(r?.recaps.map((x) => x.id)).toEqual([3, 2, 1])
+    expect(r?.newest_turn_no).toBe(20)
+    expect(r?.can_generate).toBe(false)
+    expect(r?.last_recap_to_no).toBe(3)
+  })
+
+  it('an earlier request answered late still contributes its rows, in id order, without duplicates', async () => {
+    const a = deferred<RecapsResponse>()
+    const b = deferred<RecapsResponse>()
+    fetchRecaps.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    const pa = st().loadRecaps('h1', 'S1', 5)
+    const pb = st().loadRecaps('h1', 'S1', 1)
+    b.resolve(resp([recap(5)], { newest_turn_no: 30 }))
+    await pb
+    a.resolve(resp([recap(4), recap(3), recap(5)], { newest_turn_no: 25 }))
+    await pa
+    expect(entry()?.recaps?.recaps.map((x) => x.id)).toEqual([5, 4, 3])
+    expect(entry()?.recaps?.newest_turn_no).toBe(30)
+  })
+})

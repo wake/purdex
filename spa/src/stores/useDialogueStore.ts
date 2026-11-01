@@ -10,7 +10,7 @@
 //   * A request that lands after its host was forgotten, or after support went away (disconnect, probe), is dropped (`epoch`).
 import { create } from 'zustand'
 import { fetchRecaps, fetchTurnSummaries, requestRecap } from '../lib/dialogue/api'
-import type { RecapsResponse, RecapState, RecapTrigger, TurnRange, TurnSummary } from '../lib/dialogue/types'
+import type { Recap, RecapsResponse, RecapState, RecapTrigger, TurnRange, TurnSummary } from '../lib/dialogue/types'
 
 export interface DialogueEntry {
   /** Last recaps answer (newest first); null before the first one. */
@@ -22,6 +22,8 @@ export interface DialogueEntry {
   generating: boolean
   /** The newest recap id cached when the request was queued (0: none): a recap with a larger id ends `generating`. */
   generatingBase: number
+  /** The request number of the recaps answer whose counts (`can_generate`, `newest_turn_no`, `last_recap_to_no`) are cached. */
+  recapsSeq: number
 }
 
 export type RegenerateOutcome = RecapState | 'unsupported' | 'error'
@@ -49,7 +51,7 @@ interface DialogueState {
   reset: () => void
 }
 
-const emptyEntry = (): DialogueEntry => ({ recaps: null, loading: false, summaries: {}, generating: false, generatingBase: 0 })
+const emptyEntry = (): DialogueEntry => ({ recaps: null, loading: false, summaries: {}, generating: false, generatingBase: 0, recapsSeq: 0 })
 
 export const selectDialogueSupport = (hostId: string, state: Pick<DialogueState, 'support'> = useDialogueStore.getState()): boolean =>
   state.support[hostId] === true
@@ -67,6 +69,17 @@ function withEntry(s: DialogueState, hostId: string, sessionId: string, fn: (e: 
   const host = s.byHost[hostId] ?? {}
   return { byHost: { ...s.byHost, [hostId]: { ...host, [sessionId]: fn(host[sessionId] ?? emptyEntry()) } } }
 }
+
+/** Recap rows by id, newest first. A recap never changes or goes away once written, so answers can be merged in any order. */
+function mergeRecaps(old: readonly Recap[], fresh: readonly Recap[]): Recap[] {
+  const byId = new Map<number, Recap>()
+  for (const r of old) byId.set(r.id, r)
+  for (const r of fresh) byId.set(r.id, r)
+  return [...byId.values()].sort((a, b) => b.id - a.id)
+}
+
+/** Per (host, session), the number of the last recaps GET sent: answers are ordered by when they were sent, not by when they landed. */
+const recapsIssued = new Map<string, number>()
 
 export const useDialogueStore = create<DialogueState>()((set, get) => {
   // A request still out is the current one only while its host kept the same connection: `setSupport(false)` and `forgetHost` move the epoch.
@@ -89,6 +102,9 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
   async function loadRecaps(hostId: string, sessionId: string, limit?: number): Promise<void> {
     if (!get().support[hostId]) return
     const epoch = get().epoch[hostId] ?? 0
+    const key = `${hostId}\u0000${sessionId}`
+    const seq = (recapsIssued.get(key) ?? 0) + 1
+    recapsIssued.set(key, seq)
     set((s) => withEntry(s, hostId, sessionId, (e) => ({ ...e, loading: true })))
     let answer: RecapsResponse
     try {
@@ -99,8 +115,11 @@ export const useDialogueStore = create<DialogueState>()((set, get) => {
     }
     if (!alive(hostId, epoch)) return
     set((s) => withEntry(s, hostId, sessionId, (e) => {
-      const newest = answer.recaps[0]?.id ?? 0
-      return { ...e, recaps: answer, loading: false, generating: e.generating && !(newest > e.generatingBase) }
+      const rows = mergeRecaps(e.recaps?.recaps ?? [], answer.recaps)
+      // The counts belong to the request sent last; an older one answered late only adds its rows.
+      const latest = seq >= e.recapsSeq
+      const next: RecapsResponse = latest ? { ...answer, recaps: rows } : { ...(e.recaps as RecapsResponse), recaps: rows }
+      return { ...e, recaps: next, recapsSeq: latest ? seq : e.recapsSeq, loading: false, generating: e.generating && !((rows[0]?.id ?? 0) > e.generatingBase) }
     }))
   }
 
