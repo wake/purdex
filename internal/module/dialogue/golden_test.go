@@ -50,7 +50,7 @@ func renderFixture(t *testing.T, name string) string {
 }
 
 func TestGolden(t *testing.T) {
-	for _, name := range []string{"source-kinds", "peer-message", "ask-question", "subagent", "queued-mid-turn", "compact"} {
+	for _, name := range []string{"source-kinds", "peer-message", "ask-question", "subagent", "queued-mid-turn", "compact", "slash-and-local-command"} {
 		t.Run(name, func(t *testing.T) {
 			got := renderFixture(t, name)
 			path := filepath.Join(repoRoot, "testdata/dialogue", name+".md")

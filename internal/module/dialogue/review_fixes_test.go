@@ -125,6 +125,20 @@ func TestWriterTargetIsCursorTurnOnlyCompletesIt(t *testing.T) {
 	}
 }
 
+// a Stop sent again for the cursor turn, which has nothing new: the later turn stays for its own Stop
+func TestWriterTargetIsCursorTurnWithNothingNew(t *testing.T) {
+	e := newEnv(t, Hooks{})
+	t1 := basicTurn("t1")
+	e.write(sidS, all([]convmodel.Turn{t1}), "t1", false)
+	r := e.write(sidS, fromRes([]convmodel.Turn{t1, basicTurn("t2")}, "t1"), "t1", false)
+	if len(r.Turns) != 0 {
+		t.Errorf("turns = %+v", r.Turns)
+	}
+	if got := e.read(sidS, 1); strings.Contains(got, "answer t2") {
+		t.Errorf("file = %q", got)
+	}
+}
+
 func TestWriterLateItemsOfCursorTurnBeforeLaterTarget(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	e.write(sidS, all([]convmodel.Turn{basicTurn("t1")}), "t1", false)

@@ -59,6 +59,13 @@ func TestRenderItems(t *testing.T) {
 	withKids.Step.Children = []convmodel.Item{agent("inner")}
 	think := convmodel.Item{Type: convmodel.ItemThinking, Thinking: &convmodel.Thinking{Text: "hmm"}}
 	notice := convmodel.Item{Type: convmodel.ItemSystem, System: &convmodel.System{Kind: convmodel.SystemNotice}}
+	imgOnly := user(convmodel.SourceUser, "")
+	imgOnly.User.Images = make([]convmodel.Image, 1)
+	slashImg := user(convmodel.SourceSlash, "/review")
+	slashImg.User.Images = make([]convmodel.Image, 1)
+	taskImg := user(convmodel.SourceTask, "<summary>done</summary>")
+	taskImg.User.Images = make([]convmodel.Image, 3)
+	blankUser := user(convmodel.SourceUser, "  \n")
 
 	cases := []struct {
 		name  string
@@ -75,6 +82,10 @@ func TestRenderItems(t *testing.T) {
 		{"task summary tag", []convmodel.Item{user(convmodel.SourceTask, "<task-notification>\n<summary>  Agent \"A\"\n completed </summary>\n<x>y</x>")}, []string{"<subagent done | Agent \"A\" completed>\n"}},
 		{"task no tag", []convmodel.Item{user(convmodel.SourceTask, "\n\nBackground command done\nrest")}, []string{"<subagent done | Background command done>\n"}},
 		{"image", []convmodel.Item{img}, []string{"user: see\n<image ×2>\n"}},
+		{"image only", []convmodel.Item{imgOnly}, []string{"user:\n<image ×1>\n"}},
+		{"slash with image", []convmodel.Item{slashImg}, []string{"<slash | /review>\n<image ×1>\n"}},
+		{"task with image", []convmodel.Item{taskImg}, []string{"<subagent done | done>\n<image ×3>\n"}},
+		{"blank user skipped", []convmodel.Item{blankUser}, nil},
 		{"user truncated", []convmodel.Item{trunc}, []string{"user: long…（截斷）\n"}},
 		{"agent truncated", []convmodel.Item{truncAgent}, []string{"agent: long…（截斷）\n"}},
 		{"blank agent skipped", []convmodel.Item{agent("  \n "), step("Bash", "ls")}, []string{"<tool Bash | ls>\n"}},
