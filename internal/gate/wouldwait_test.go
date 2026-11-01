@@ -36,7 +36,9 @@ func TestWouldWait_AllSlotsTakenSaysWhoAndHowLong(t *testing.T) {
 	assert.True(t, w.Wait)
 	assert.Equal(t, "slots", w.Reason)
 	assert.Equal(t, 1, w.Ahead)
-	assert.Contains(t, w.HeldBy, "started-a")
+	// how long, then the command from its start: the line keeps only its first 100 characters, and the temp dir in the script can be
+	// longer than that (a wwd work dir is), so the marker at its end is not always there
+	assert.Regexp(t, `^held \S+ by "sh -c touch `, w.HeldBy)
 	assert.Contains(t, w.Note, "waiting for a heavy slot")
 	assert.Contains(t, w.Note, "do not interrupt it")
 	// the other class is not affected
