@@ -315,7 +315,7 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 - 寫入照 T8 的兩段契約：
   - `apply`（一個交易）：以 job id 為唯一鍵新增 `dlg_recaps`（`job_id` 欄位 UNIQUE，已存在就回 nil、什麼都不做），同交易 `since_recap = 0`；
   - `after`（恰好一次）：
-    1. 對話檔接上 `<recap HH:MM | turns a–b>` 與結構化內文（格式見 spec §2.2 範例，欄名英文、內文繁中）；
+    1. 對話檔接上 `<recap HH:MM | turns a–b>` 與結構化內文（格式見 spec §2.2 範例，欄名英文、內文繁中；空的清單與空的 now／next 整段省略）；
     2. 廣播 host 事件 `dialogue.recap`，值 `{"session_id","recap_id"}`；
   - `finish`：recap 沒有預先建立的列，只需清掉「這個 session 有 recap 在排隊或執行中」的記錄，讓下次觸發能再排。
 - 換段時 writer 的 `Carried` 接點回傳這個 session 最新一則 recap 的文字，寫在新段的 `<carried recap HH:MM | turns a–b>` 之下（spec §2.2）。
@@ -333,9 +333,10 @@ PR 依序合併。PR 1 與 PR 2 分開的理由：PR 1 是新增、不碰工作�
 ### T11. API、capability、裝置白名單
 
 - 路由（dialogue 模組註冊在 core 的 mux，樣式照工作簿的 `api.go:152-157`）：
-  - `GET /api/dialogue/{session_id}/recaps?limit=`：新到舊，預設 20、上限 100；每則 `{id, at, from_no, to_no, trigger, headline, done, now, decided, waiting, next}`；
-  - `GET /api/dialogue/{session_id}/turn-summaries?from=&to=`：依回合編號，舊到新，一次最多 100 則；每則 `{turn_no, at, title, summary, push, state}`；
-  - `POST /api/dialogue/{session_id}/recap`：回 `{"state":"queued"|"up_to_date"|"unavailable"}`。
+  - `GET /api/dialogue/{session_id}/recaps?limit=`：新到舊，預設 20、上限 100；回 `{"recaps":[…], "can_generate", "newest_turn_no", "last_recap_to_no"}`，每則 `{id, at, from_no, to_no, trigger, headline, done, now, decided, waiting, next}`（清單空的回 `[]`）。三個附帶欄位給 App 判斷「產生中／已是最新／session 已結束」：`can_generate`＝session 現在能接 job，`newest_turn_no`＝最新 done 回合摘要的編號，`last_recap_to_no`＝最新 recap 的 `to_no`（沒有都是 0）；
+  - `GET /api/dialogue/{session_id}/turn-summaries?from=&to=&limit=`：只回 done 的，依回合編號舊到新，回 `{"turn_summaries":[…]}`，每則 `{turn_no, at, title, summary, push}`；可只給 `from`（最後一則 recap 之後的回合）、只給 `limit`（最新幾則），limit 預設與上限 100；範圍超過上限時回範圍內最新的 100 則；
+  - `POST /api/dialogue/{session_id}/recap`：body `{"trigger":"open"|"manual"}`，可省略（＝manual）；回 `{"state":"queued"|"up_to_date"|"unavailable"}`。
+  - （寫 T11 時依原型的兩個待決題加了 `limit`、只給 `from` 與三個附帶欄位；PR 2 合併前審查後 POST body 改成可省略。）
 - session_id 格式不合回 400；模組沒就緒回 503。
 - `/api/info`：dialogue 模組 ready 時宣告 `dialogue.v1`。測試要用真的模組註冊再打 `/api/info`（不是替身）。
 - `cmd/pdx/device_scope.go`：三條路由加進白名單（T7 已拿掉舊的）。
