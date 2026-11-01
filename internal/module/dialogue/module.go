@@ -15,6 +15,7 @@ import (
 
 	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/modevents"
 	agentmod "github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
 )
@@ -38,6 +39,13 @@ type Module struct {
 
 	intake       *intake
 	unsubTurnEnd func()
+
+	// The job channel (queue.go): created by Start, read by the "workbook.jobs" service. kinds is what T9/T10 fill in
+	// before Start: one handler per job kind.
+	jobs       *channel
+	kinds      map[string]kindHandler
+	stopReaper context.CancelFunc
+	reaperDone chan struct{}
 }
 
 func New() *Module { return &Module{} }
@@ -62,6 +70,10 @@ func (m *Module) Init(c *core.Core) error {
 		return nil
 	}
 	m.store, m.ready, m.initErr = st, true, ""
+	// The mod's routes find the channel by this name (jobs.go); the service says not ready until Start builds the channel.
+	if c.Registry != nil {
+		c.Registry.Register(jobsKey, jobsService{m: m})
+	}
 	return nil
 }
 
@@ -131,18 +143,42 @@ func (m *Module) Start(context.Context) error {
 	}
 	w := NewWriter(filepath.Join(dataDir, "dialogue"), st, prevOf, Hooks{}, WithLogf(logf))
 	in := newIntake(intakeDeps{turns: turns, writer: w, store: st, logf: logf, timing: defaultTiming})
+	// The channel is built before the subscription, so the first turn end can already queue a job.
+	var capable func(sid string) bool
+	if reg != nil {
+		// A session is capable when a live stream of it announced workbook.v2 within the last 30 s; the registry is the
+		// mod event channel's ("modevents" is its service name, kept as a string so this module does not import that one).
+		if svc, ok := reg.Get("modevents"); ok {
+			if mr, ok := svc.(*modevents.Registry); ok {
+				capable = func(sid string) bool { return mr.SessionCapable(sid, modevents.CapWorkbookV2, modevents.CapsFresh) }
+			}
+		}
+	}
+	m.mu.Lock()
+	kinds := m.kinds
+	m.mu.Unlock()
+	ch := newChannel(chanDeps{capable: capable, handlers: kinds, logf: logf})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); ch.runReaper(ctx) }()
 	m.mu.Lock()
 	m.intake = in
+	m.jobs, m.stopReaper, m.reaperDone = ch, cancel, done
 	m.unsubTurnEnd = sub.SubscribeTurnEnd(in.OnTurnEnd)
 	m.mu.Unlock()
 	return nil
 }
 
-// Stop unsubscribes and waits for the workers, so nothing writes once it returns; the store itself is released by Close.
+// Stop unsubscribes and waits for the workers, then stops the job channel, so nothing writes once it returns; the store
+// itself is released by Close. The intake goes first: it is the only thing that queues new jobs, and its workers never wait
+// on the channel, so they end at once; the channel then ends what is queued or leased (their rows are written while the
+// store is still open) and waits for the results being applied, which wakes every push wait before its timeout.
 func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
 	st, in, unsub := m.store, m.intake, m.unsubTurnEnd
+	ch, stopReaper, reaperDone := m.jobs, m.stopReaper, m.reaperDone
 	m.store, m.ready, m.intake, m.unsubTurnEnd = nil, false, nil, nil
+	m.jobs, m.stopReaper, m.reaperDone = nil, nil, nil
 	if st != nil {
 		m.closing = st // released by Close, after the HTTP server drained
 	}
@@ -152,6 +188,15 @@ func (m *Module) Stop(context.Context) error {
 	}
 	if in != nil {
 		in.Stop()
+	}
+	if stopReaper != nil {
+		stopReaper()
+	}
+	if ch != nil {
+		ch.Stop()
+	}
+	if reaperDone != nil {
+		<-reaperDone
 	}
 	return nil
 }
