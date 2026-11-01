@@ -186,8 +186,12 @@ func (w *Writer) Write(sid string, res convturns.TurnsFromResult, target string,
 // AppendMarker puts one block (a turn summary, T9; PR 2's recap uses it too) at the end of the session's current segment,
 // set off by a blank line, and records the new size so the next Write does not take it for crash residue. The cursor is
 // not moved. It does nothing (logged) for a session with no file yet, a file shorter than recorded (the next Write
-// rebuilds and Placed puts the block back) and a session being rebuilt (the rebuild's Placed covers it).
-func (w *Writer) AppendMarker(sid, text string) error {
+// rebuilds and Placed puts the block back) and a session being rebuilt that has not written turn turnNo yet (the rebuild's
+// Placed covers it). turnNo is the number of the turn the block belongs to (a recap passes its to_no).
+//
+// If the Commit at the end fails the file is longer than recorded, and the next Write cuts the block off: the summary is
+// still in the database and the next rebuild puts it back (a trade-off, not retried here).
+func (w *Writer) AppendMarker(sid string, turnNo int, text string) error {
 	if _, err := w.sessionDir(sid); err != nil {
 		return err
 	}
@@ -204,8 +208,17 @@ func (w *Writer) AppendMarker(sid, text string) error {
 		return nil
 	}
 	if st.Rebuilding {
-		w.log("[dialogue] session %s is being rebuilt: a marker is left to the rebuild", sid)
-		return nil
+		// A rebuild that stopped at its target stays marked until a later Write reaches the end. A block of a turn the
+		// rebuild has written already (its number is at most the cursor turn's) goes to the end of the file as usual; one
+		// of a turn not reached yet is left, and Placed puts it in when that turn is written.
+		cursorNo, found, err := w.store.TurnNo(sid, st.CursorTurn)
+		if err != nil {
+			return err
+		}
+		if st.CursorTurn == "" || !found || turnNo > cursorNo {
+			w.log("[dialogue] session %s is being rebuilt and has not reached turn %d: a marker is left to the rebuild", sid, turnNo)
+			return nil
+		}
 	}
 	path := w.segPath(sid, st.Segment)
 	fi, err := os.Stat(path)

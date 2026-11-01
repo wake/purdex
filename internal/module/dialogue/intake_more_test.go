@@ -50,6 +50,55 @@ func TestIntakeRetryReadsFromTheMovedCursor(t *testing.T) {
 	}
 }
 
+func pickedIDs(c writtenCall) string {
+	return pickIDs(pickSummaries(c.ev, c.res, c.wr, c.target))
+}
+
+// What onWritten gets holds the content of every turn the event wrote, also those written before a re-read that
+// started later in the conversation, so no written turn is left without a summary.
+func TestIntakeOnWrittenKeepsTurnsOfEarlierWrites(t *testing.T) {
+	t.Run("first, the event names the last turn", func(t *testing.T) {
+		h := newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
+			st := convmodel.StepRunning
+			if n >= 3 {
+				st = convmodel.StepDone
+			}
+			return fromRes([]convmodel.Turn{basicTurn("A"), basicTurn("B"), toolTurnID("C", st)}, from), nil
+		})
+		h.in.OnTurnEnd(stopEv(sidS, 1000))
+		h.waitSettled(1)
+		w := h.writtenCalls()
+		if len(w) != 1 || w[0].target != "C" {
+			t.Fatalf("written = %+v", w)
+		}
+		if got := pickedIDs(w[0]); got != "C," {
+			t.Fatalf("picks %s, want C,", got)
+		}
+	})
+	t.Run("not first, no target: the newest three", func(t *testing.T) {
+		h := newHarness(t, func(sid, from string, n int) (convturns.TurnsFromResult, error) {
+			switch {
+			case n == 1:
+				return fromRes([]convmodel.Turn{basicTurn("X")}, from), nil
+			case n <= 3: // the first read of event 2, and the one after the Write that stopped at the running tool
+				return fromRes([]convmodel.Turn{basicTurn("X"), basicTurn("A"), basicTurn("B"), toolTurnID("C", convmodel.StepRunning)}, from), nil
+			}
+			return fromRes([]convmodel.Turn{basicTurn("X"), basicTurn("A"), basicTurn("B"), toolTurnID("C", convmodel.StepDone)}, from), nil
+		})
+		h.in.OnTurnEnd(stopEv(sidS, 1))
+		h.waitSettled(1)
+		h.in.OnTurnEnd(stopEv(sidS, 1))
+		h.waitSettled(2)
+		w := h.writtenCalls()
+		if len(w) != 2 || w[1].wr.First || w[1].target != "" {
+			t.Fatalf("written = %+v", w)
+		}
+		if got := pickedIDs(w[1]); got != "A,B,C," {
+			t.Fatalf("picks %s, want A,B,C,", got)
+		}
+	})
+}
+
 // a rebuild that stops at a running tool continues without a second rebuild.
 func TestIntakeNeedAllThenWaitingTool(t *testing.T) {
 	var mu sync.Mutex

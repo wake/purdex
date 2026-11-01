@@ -94,6 +94,11 @@ func (k *summaryKind) apply(j job, text string, u usage) error {
 
 // after runs once per stored answer: the summary goes into the dialogue file, the push wait looks again, and a recap is
 // queued when enough summaries are done since the last one. Best-effort: it only logs.
+//
+// Known, accepted: a rebuild that finishes between SetSummaryDone and this call has already put the block back through
+// Placed, and the AppendMarker below adds a second copy (a very narrow window). Also, the recap trigger is called every time
+// SinceRecap is at least recapEvery, not once: "a recap for this session is already queued or running, so no second one"
+// is the recap trigger's job (T10), not this one's.
 func (k *summaryKind) after(j job) {
 	p, err := payloadOf(j)
 	if err != nil {
@@ -110,7 +115,7 @@ func (k *summaryKind) after(j job) {
 		k.wake() // skipped by the model (or ended by someone else meanwhile): nothing to put in the file
 		return
 	}
-	if err := k.w.AppendMarker(row.SessionID, summaryBlock(row)); err != nil {
+	if err := k.w.AppendMarker(row.SessionID, row.TurnNo, summaryBlock(row)); err != nil {
 		k.log("[dialogue] put turn summary %d into the dialogue file: %v", row.ID, err)
 	}
 	k.wake()

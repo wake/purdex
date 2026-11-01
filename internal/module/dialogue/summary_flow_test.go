@@ -176,6 +176,79 @@ func TestFlow_AnswerLandsInTheFileAndTheWait(t *testing.T) {
 	}
 }
 
+// The transcript never catches up with a Stop: the newest turn is still running with no words of its own. Write is forced and
+// writes it; the turn is then the event's, the summary takes the event's time and the hook's text, and the push wait holds
+// for it.
+func TestFlow_ForcedWriteGivesTheStopsTurnItsSummary(t *testing.T) {
+	f := newFlow(t, true, true)
+	f.setTurns(turn("t1", convmodel.OutcomeRunning, userItem("u1", "question t1")))
+	at := time.Now().Add(time.Hour).UnixMilli()
+	got := make(chan workbooklines.Line, 1)
+	go func() {
+		l, ok := f.lines().Await(context.Background(), sidS, at, time.Now().Add(20*time.Second))
+		if !ok {
+			l = workbooklines.Line{}
+		}
+		got <- l
+	}()
+	f.sub.emit(agentmod.TurnEndEvent{SessionID: sidS, At: at, Seq: at, Text: "hook says hi"})
+	select {
+	case <-f.settled:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the event did not settle")
+	}
+	rows := f.summaries()
+	if len(rows) != 1 || rows[0].TurnID != "t1" || rows[0].TurnAt != at {
+		t.Fatalf("rows = %+v", rows)
+	}
+	select {
+	case l := <-got:
+		t.Fatalf("the wait returned before the answer: %+v", l)
+	case <-time.After(100 * time.Millisecond):
+	}
+	j := f.job()
+	if !strings.Contains(j.Complete.Prompt, `"assistant_text":"hook says hi"`) {
+		t.Fatalf("prompt = %s", j.Complete.Prompt)
+	}
+	f.answer(j, haikuJSON)
+	select {
+	case l := <-got:
+		if l.Thing != "俳句" {
+			t.Fatalf("line = %+v", l)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the push wait did not return")
+	}
+}
+
+// The push module may ask while the store is not open (the module failed to open it, or has been stopped): it gets "no
+// line" at once and nothing panics.
+func TestFlow_AwaitWithoutAStoreIsFalse(t *testing.T) {
+	check := func(name string, l workbooklines.Lines) {
+		start := time.Now()
+		if _, ok := l.Await(context.Background(), sidS, 1000, time.Now().Add(5*time.Second)); ok || time.Since(start) > time.Second {
+			t.Fatalf("%s: Await ok=%v after %v", name, ok, time.Since(start))
+		}
+	}
+	check("no store", StorePushLines(func() *Store { return nil }))
+	f := newFlow(t, true, false)
+	lines := f.lines()
+	if err := f.m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	check("stopped", lines)
+}
+
+// Without a lineage resolver in the registry a summary's conversation key is its session.
+func TestFlow_NoLineageResolverConvKeyIsTheSession(t *testing.T) {
+	f := newFlow(t, true, true)
+	f.setTurns(ended("t1"))
+	f.stop(time.Now().UnixMilli() + 1000)
+	if rows := f.summaries(); len(rows) != 1 || rows[0].ConvKey != sidS {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
 // 2 + 3: the first event of a session summarises only its own turn; later five new turns make three summaries.
 func TestFlow_FirstEventOneTurnThenFiveNewMakeThree(t *testing.T) {
 	f := newFlow(t, true, true)

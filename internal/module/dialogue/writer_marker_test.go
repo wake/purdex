@@ -20,7 +20,7 @@ func TestAppendMarker_SurvivesTheNextWrite(t *testing.T) {
 	e := newEnv(t, Hooks{})
 	turns := markerTurns()
 	e.write(sidS, fromRes(turns[:1], ""), "", false)
-	if err := e.w.AppendMarker(sidS, "<turn-summary 1 · 09:05 | 俳句>\n寫了兩首俳句。"); err != nil {
+	if err := e.w.AppendMarker(sidS, 1, "<turn-summary 1 · 09:05 | 俳句>\n寫了兩首俳句。"); err != nil {
 		t.Fatal(err)
 	}
 	st, _, _ := e.store.Session(sidS)
@@ -49,7 +49,7 @@ func TestAppendMarker_CutsCrashResidueFirst(t *testing.T) {
 	}
 	f.WriteString("\nHALF A BLOCK")
 	f.Close()
-	if err := e.w.AppendMarker(sidS, "<turn-summary 1 · 09:05 | x>\nbody"); err != nil {
+	if err := e.w.AppendMarker(sidS, 1, "<turn-summary 1 · 09:05 | x>\nbody"); err != nil {
 		t.Fatal(err)
 	}
 	got := e.read(sidS, 1)
@@ -62,10 +62,46 @@ func TestAppendMarker_CutsCrashResidueFirst(t *testing.T) {
 	}
 }
 
+// During a rebuild that stopped at its target, a summary of a turn already rewritten goes to the end of the file; one of a
+// turn not yet reached is left, and Placed puts it in when that turn is written (exactly once).
+func TestAppendMarker_DuringRebuild(t *testing.T) {
+	placed := map[string][]string{}
+	e := newEnv(t, Hooks{Placed: func(sid, turnID string) []string { return placed[turnID] }})
+	turns := []convmodel.Turn{done("t1", userItem("u1", "one")), done("t2", userItem("u2", "two")), done("t3", userItem("u3", "three"))}
+	e.write(sidS, all(turns), "", false)
+	cut := []convmodel.Turn{done("t1", userItem("u1", "one")), turn("t2", convmodel.OutcomeRunning, userItem("u2", "two")), turns[2]}
+	if r := e.write(sidS, all(cut), "other", false); !r.Rebuilt {
+		t.Fatalf("result = %+v", r)
+	}
+	if st, _, _ := e.store.Session(sidS); !st.Rebuilding || st.CursorTurn != "t1" {
+		t.Fatalf("state after the cut = %+v", st)
+	}
+	if err := e.w.AppendMarker(sidS, 1, "<S1>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.w.AppendMarker(sidS, 2, "<S2>"); err != nil {
+		t.Fatal(err)
+	}
+	got := e.read(sidS, 1)
+	if strings.Count(got, "<S1>") != 1 || strings.Contains(got, "<S2>") {
+		t.Fatalf("after the markers: %q", got)
+	}
+	st, _, _ := e.store.Session(sidS)
+	if fi, _ := os.Stat(e.seg(sidS, 1)); fi.Size() != st.SegBytes {
+		t.Fatalf("size %d, recorded %d", fi.Size(), st.SegBytes)
+	}
+	placed["t2"] = []string{"<S2>"} // its summary is done by the time t2 is written
+	e.write(sidS, fromRes(turns, e.cursorOf(sidS)), "", false)
+	got = e.read(sidS, 1)
+	if strings.Count(got, "<S1>") != 1 || strings.Count(got, "<S2>") != 1 {
+		t.Fatalf("after the rebuild: %q", got)
+	}
+}
+
 // A session with no file yet gets nothing, and no state is made up for it.
 func TestAppendMarker_NoSegmentYetIsSkipped(t *testing.T) {
 	e := newEnv(t, Hooks{})
-	if err := e.w.AppendMarker(sidS, "x\ny"); err != nil {
+	if err := e.w.AppendMarker(sidS, 1, "x\ny"); err != nil {
 		t.Fatal(err)
 	}
 	if _, has, _ := e.store.Session(sidS); has {
@@ -77,7 +113,7 @@ func TestAppendMarker_NoSegmentYetIsSkipped(t *testing.T) {
 	if len(e.logs) == 0 {
 		t.Error("the skip was not logged")
 	}
-	if err := e.w.AppendMarker("not-a-uuid", "x"); err == nil {
+	if err := e.w.AppendMarker("not-a-uuid", 1, "x"); err == nil {
 		t.Error("an invalid session id was accepted")
 	}
 }

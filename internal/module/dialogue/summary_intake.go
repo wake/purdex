@@ -3,6 +3,8 @@ package dialogue
 // Which turns get a summary after an event was written, and the intake hooks that queue them (plan T9).
 
 import (
+	"strings"
+
 	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/convturns"
 	agentmod "github.com/wake/purdex/internal/module/agent"
@@ -48,7 +50,9 @@ func pickSummaries(ev agentmod.TurnEndEvent, res convturns.TurnsFromResult, wr W
 	var picks []summaryPick
 	for _, c := range cands {
 		t, ok := inHand[c.ID]
-		if !ok || !summarisable(t) || (t.Outcome == convmodel.OutcomeRunning && t.ID != targetID) {
+		// the event's own turn is summarised from the hook's text when the transcript has nothing of it yet (plan §1-8)
+		hookOnly := targetID != "" && t.ID == targetID && strings.TrimSpace(ev.Text) != ""
+		if !ok || (!summarisable(t) && !hookOnly) || (t.Outcome == convmodel.OutcomeRunning && t.ID != targetID) {
 			continue
 		}
 		picks = append(picks, summaryPick{turn: t, no: c.No, at: turnOwnEnd(t, ev.At)})

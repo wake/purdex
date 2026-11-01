@@ -354,8 +354,9 @@ func TestIntakeForcesAfterFifteenWaitsAndLaterTextJoinsTheTurn(t *testing.T) {
 	if !strings.Contains(got, "user: question t1") || strings.Contains(got, "late words") {
 		t.Fatalf("the forced write should hold the file as it was:\n%s", got)
 	}
-	if h.writtenCalls()[0].target != "" {
-		t.Fatalf("target = %q", h.writtenCalls()[0].target)
+	// Write got no target, but the turn it wrote is the Stop's: onWritten names it so its summary uses the event's stamp
+	if c := h.writtenCalls()[0]; c.target != "t1" || c.hook != "late words" {
+		t.Fatalf("target = %q, hook = %q", c.target, c.hook)
 	}
 
 	mu.Lock()
