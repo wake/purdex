@@ -9,7 +9,7 @@ import { ArrowsClockwise, CaretDown, CaretLeft, CaretRight, ClockCounterClockwis
 import { selectDialogueEntry, summariesInRange, useDialogueStore } from '../../stores/useDialogueStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { keepFocus } from '../../lib/keep-focus'
-import type { Recap, TurnSummary } from '../../lib/dialogue/types'
+import { TURN_SUMMARIES_LIMIT, type Recap, type TurnSummary } from '../../lib/dialogue/types'
 import { clockOf } from './recap-text'
 
 interface Props {
@@ -57,7 +57,8 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
   const generating = entry?.generating === true
   const canGenerate = recaps?.can_generate === true
   const failed = recaps === null && entry !== undefined && !entry.loading
-  const newCount = pending.length > 0 ? pending.length : Math.max(0, newest - lastTo)
+  // The number of turns not in a recap is a difference of turn numbers: the list of summaries is capped (TURN_SUMMARIES_LIMIT).
+  const newCount = Math.max(0, newest - lastTo)
 
   let status: React.ReactNode
   let tip: string
@@ -77,7 +78,7 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
     if (outcome === 'error') setNotice(true)
   }
 
-  const pendingLabel = !canGenerate ? t('recap.after.ended', { n: pending.length }) : generating ? t('recap.after.generating', { n: pending.length }) : t('recap.after.live', { n: pending.length })
+  const pendingLabel = !canGenerate ? t('recap.after.ended', { n: newCount }) : generating ? t('recap.after.generating', { n: newCount }) : t('recap.after.live', { n: newCount })
   const dot = tone === 'ok' ? 'bg-status-success' : tone === 'acc' ? 'bg-accent' : 'bg-text-muted'
 
   return (
@@ -133,7 +134,12 @@ export function RecapView({ hostId, sessionId, label, backLabel, onBack }: Props
               {afterOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
               {pendingLabel}
             </button>
-            {afterOpen && <div className="px-2 pb-1.5"><TurnRows list={pending} /></div>}
+            {afterOpen && (
+              <div className="px-2 pb-1.5">
+                <TurnRows list={pending} />
+                {pending.length >= TURN_SUMMARIES_LIMIT && <p data-testid="recap-after-capped" className="mt-1 text-[10.5px] text-text-muted">{t('recap.after.capped', { n: TURN_SUMMARIES_LIMIT })}</p>}
+              </div>
+            )}
           </div>
         )}
         {recaps !== null && recaps.recaps.length === 0 && !generating && (

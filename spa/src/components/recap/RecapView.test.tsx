@@ -246,6 +246,41 @@ describe('RecapView: the turns after the newest recap (decision 2 = B)', () => {
     expect(within(after).queryByTestId('recap-turn-row')).toBeNull()
   })
 
+  it('counts the turns by number, not by how many summaries the daemon listed (it lists at most the newest 100)', async () => {
+    fetchRecaps.mockResolvedValue(resp([recap(1, { to_no: 30 })], { newest_turn_no: 180, last_recap_to_no: 30 }))
+    fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? Array.from({ length: 100 }, (_, i) => turn(81 + i)) : []))
+    requestRecap.mockResolvedValue('up_to_date')
+    mount()
+    await settle()
+    expect(screen.getByTestId('recap-status')).toHaveTextContent('有 150 則新的回合摘要')
+    expect(screen.getByTestId('recap-after')).toHaveTextContent('有 150 則新的回合摘要，還沒寫進 recap')
+    expect(screen.getByTestId('recap-after-capped')).toHaveTextContent('只列出最新 100 則')
+  })
+
+  it('no capped note when the listed summaries are all of them', async () => {
+    fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33 }))
+    fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? [turn(31), turn(32), turn(33)] : []))
+    mount()
+    await settle()
+    expect(screen.queryByTestId('recap-after-capped')).toBeNull()
+  })
+
+  it('labels: ended says the last N turns before it ended, generating says these N are being written', async () => {
+    fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33, can_generate: false }))
+    fetchTurnSummaries.mockImplementation(async (_h, _s, r) => (r?.from === 31 ? [turn(31), turn(32), turn(33)] : []))
+    mount()
+    await settle()
+    expect(screen.getByTestId('recap-after')).toHaveTextContent('結束前最後 3 回合沒有寫進 recap')
+    cleanup()
+    useDialogueStore.getState().reset()
+    useDialogueStore.getState().setSupport('h1', true)
+    fetchRecaps.mockResolvedValue(resp([recap(1)], { newest_turn_no: 33 }))
+    requestRecap.mockResolvedValue('queued')
+    mount()
+    await settle()
+    expect(screen.getByTestId('recap-after')).toHaveTextContent('這 3 則正在寫進新的 recap')
+  })
+
   it('is absent when every turn is already in a recap', async () => {
     fetchRecaps.mockResolvedValue(resp([recap(1)]))
     mount()

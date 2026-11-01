@@ -3412,6 +3412,7 @@
   "recap.after.live": "{{n}} new turn summaries are not in a recap yet",
   "recap.after.generating": "These {{n}} are being written into a new recap",
   "recap.after.ended": "The last {{n}} turns before it ended are not in a recap",
+  "recap.after.capped": "Only the newest {{n}} are listed",
   "recap.generating.title": "Writing a recap",
   "recap.empty.title": "No recap yet",
   "recap.empty.ended": "This session left no recap.",

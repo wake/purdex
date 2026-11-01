@@ -3412,6 +3412,7 @@
   "recap.after.live": "有 {{n}} 則新的回合摘要，還沒寫進 recap",
   "recap.after.generating": "這 {{n}} 則正在寫進新的 recap",
   "recap.after.ended": "結束前最後 {{n}} 回合沒有寫進 recap",
+  "recap.after.capped": "只列出最新 {{n}} 則",
   "recap.generating.title": "正在產生 recap",
   "recap.empty.title": "還沒有 recap",
   "recap.empty.ended": "這個 session 沒有留下 recap。",

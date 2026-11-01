@@ -48,3 +48,6 @@ export interface TurnRange {
   to?: number
   limit?: number
 }
+
+/** The most turn summaries one `turn-summaries` read gives (the newest ones in the range): the daemon's limit (plan T11). */
+export const TURN_SUMMARIES_LIMIT = 100
