@@ -55,7 +55,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useI18nStore.getState().setLocale('zh-TW')
-  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {} })
+  useTeamUiStore.setState({ panel: { width: 312 } })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })

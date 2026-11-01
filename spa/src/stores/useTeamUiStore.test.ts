@@ -11,7 +11,7 @@ const k = (host: string, team: string) => teamKeyOf(host, team)
 beforeEach(() => {
   localStorage.clear()
   useUISettingsStore.setState({ tabIndicatorStyle: 'badge', hostBadgeSidebarBox: 16 })
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, panel: { width: 312 }, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', ghostWorkspace: {}, endedSeats: {}, panel: { width: 312 }, teamBeadHost: true })
 })
 
 describe('useTeamUiStore', () => {
@@ -25,7 +25,7 @@ describe('useTeamUiStore', () => {
     const raw = JSON.parse(localStorage.getItem('purdex-team-ui')!)
     expect(raw.state).toEqual({
       memberOrder: { [key]: ['b', 'a'] }, collapsed: { [key]: true }, panelMode: { [key]: 'line' }, ghostWorkspace: { [key]: 'w9' },
-      teamBeadHost: true, sidebarView: 'workspace', teamDrill: {}, endedSeats: {}, panel: { width: 312 },
+      teamBeadHost: true, sidebarView: 'workspace', endedSeats: {}, panel: { width: 312 },
       panelLast: { [key]: 'line' }, sharedPanelMode: 'titlebar', sharedPanelLast: 'full',
     })
     const saved = localStorage.getItem('purdex-team-ui')!
@@ -290,17 +290,15 @@ describe('the panel area (WA-2a)', () => {
       expect(width()).toBe(412)
     })
   })
-  it('teamDrill round-trips and heals', () => {
-    const key = k('h1', 't1')
-    useTeamUiStore.getState().setTeamDrill(key, { hostId: 'h1', sessionId: 's1' })
-    expect(saved().teamDrill).toEqual({ [key]: { hostId: 'h1', sessionId: 's1' } })
-    useTeamUiStore.getState().setTeamDrill(key, null)
-    expect(useTeamUiStore.getState().teamDrill).toEqual({})
+  it('an old store that still carries teamDrill (no view reads it) loads without it and never writes it back', () => {
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: {
-      teamDrill: { [k('h', 't')]: { hostId: 'h', sessionId: 's' }, bad1: { hostId: 1, sessionId: 's' }, bad2: 'x', bad3: { hostId: '', sessionId: 's' } },
+      teamDrill: { [k('h', 't')]: { hostId: 'h', sessionId: 's' } }, panelMode: { [k('h', 't')]: 'line' },
     }, version: 0 }))
     useTeamUiStore.persist.rehydrate()
-    expect(useTeamUiStore.getState().teamDrill).toEqual({ [k('h', 't')]: { hostId: 'h', sessionId: 's' } })
+    expect('teamDrill' in (useTeamUiStore.getState() as unknown as Record<string, unknown>)).toBe(false)
+    expect(useTeamUiStore.getState().panelMode).toEqual({ [k('h', 't')]: 'line' })
+    useTeamUiStore.getState().setCollapsed(k('h', 't'), true)
+    expect(saved()).not.toHaveProperty('teamDrill')
   })
   it('an old store that still carries the per-tab workbook toggle (workbookTabs) loads without it and never writes it back (round 3: no per-tab toggle)', () => {
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: {
@@ -313,37 +311,6 @@ describe('the panel area (WA-2a)', () => {
     expect(useTeamUiStore.getState().panelMode).toEqual({ [k('h', 't')]: 'line' })
     useTeamUiStore.getState().setCollapsed(k('h', 't'), true) // any write persists the state
     expect(saved()).not.toHaveProperty('workbookTabs')
-  })
-  it('heal drops teamDrill entries with a malformed key or a non-string session, and keeps a remote seat (its host differs from the lead host)', () => {
-    const ok = k('h1', 't1')
-    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { teamDrill: {
-      [ok]: { hostId: 'h1', sessionId: 's' },
-      'no-separator': { hostId: 'no-separator', sessionId: 's' },
-      [k('', 't')]: { hostId: '', sessionId: 's' },
-      [k('h1', '')]: { hostId: 'h1', sessionId: 's' },
-      [k('h2', 't2')]: { hostId: 'h1', sessionId: 's' }, // a remote seat: the lead's host differs from the seat's
-      [k('h1', 't3')]: { hostId: 'h1', sessionId: 5 },
-      [k('h1', 't4')]: { hostId: 'h1', sessionId: '' },
-    } }, version: 0 }))
-    useTeamUiStore.persist.rehydrate()
-    expect(useTeamUiStore.getState().teamDrill).toEqual({ [ok]: { hostId: 'h1', sessionId: 's' }, [k('h2', 't2')]: { hostId: 'h1', sessionId: 's' } })
-  })
-  it('forgetTeams / forgetHostTeams drop the teamDrill of a team that is gone', () => {
-    const live = k('h1', 'live'), gone = k('h1', 'gone'), other = k('h2', 'x')
-    for (const key of [live, gone, other]) useTeamUiStore.getState().setTeamDrill(key, { hostId: 'h1', sessionId: 's' })
-    useTeamUiStore.getState().forgetTeams('h1', [live])
-    expect(Object.keys(useTeamUiStore.getState().teamDrill).sort()).toEqual([live, other].sort())
-    useTeamUiStore.getState().forgetHostTeams('h1')
-    expect(Object.keys(useTeamUiStore.getState().teamDrill)).toEqual([other])
-  })
-  it('snapshot / restore carry teamDrill', () => {
-    const a = k('h1', 't1')
-    useTeamUiStore.getState().setTeamDrill(a, { hostId: 'h1', sessionId: 's' })
-    const snap = useTeamUiStore.getState().snapshotHostTeams('h1')
-    useTeamUiStore.getState().forgetHostTeams('h1')
-    expect(useTeamUiStore.getState().teamDrill).toEqual({})
-    useTeamUiStore.getState().restoreHostTeams(snap)
-    expect(useTeamUiStore.getState().teamDrill[a]).toEqual({ hostId: 'h1', sessionId: 's' })
   })
 })
 
