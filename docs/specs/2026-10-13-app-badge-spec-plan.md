@@ -16,13 +16,16 @@ Review: codex (gpt-5.6-sol, low) on spec + plan, 10 findings (1 critical: one ca
 - **Cards** are approvals the user must act on: `lead`, `self_relay`, `member_relay`, `adopt`, and Claude Code asking
   the user (`hook_ask`, including terminal-only ones the phone cannot answer, and `hook_permission`). A paused session
   (unattended quota pause) is not counted on its own: the card it waits on is.
-- **Mac (Dock)**: an unread event counts only for a session open as a tab in any workspace of any window; a card counts
-  whether or not its session has a tab.
+- **Mac (Dock)**: an unread event counts only for a session open as a tab in any workspace of any window, **and not a
+  team member** *(member spec `2026-10-17-member-quiet-spec-plan.md` R2, user 2026-10-17)*; a card counts
+  whether or not its session has a tab (a member's card included).
 - **iPhone**: an unread event counts for every session except **team members** and sessions **muted on this phone**;
   a card counts always (members and muted sessions included). The phone's tab list is the Mac's (profile sync), so
   "every session" means sessions with no tab too.
 - **iPhone pushes (option 甲)**: every non-member session pushes (a visible notification) whether or not it has a tab.
-  A member pushes only when it has a tab (as today), and its event does not count. A session can be **muted on the
+  ~~A member pushes only when it has a tab (as today), and its event does not count.~~ A member's waiting and idle
+  events are not pushed, tab or not; its errors push like any session's; its event does not count *(member spec R1,
+  R2, user 2026-10-17)*. A session can be **muted on the
   phone** (new): no agent-event push and no unread count; its cards still push and count. Mute is per phone and
   can be undone. The per-agent-type 「沒開分頁也通知」 switch stays, its default becomes **on**; a type switched off
   neither pushes nor counts for its sessions without a tab.
@@ -63,11 +66,14 @@ Review: codex (gpt-5.6-sol, low) on spec + plan, 10 findings (1 critical: one ca
   here). Rows of remote members on a lead host describe sessions running elsewhere and are not consulted (their
   events reach their own host's daemon). A lead is not a member; an event with no session id is not a member. The
   implementation must not reuse `SessionRole` as is (it ranks lead first and has its own state set); a test pins each
-  row state. **A read error is treated as "member, unknown"**: the gate applies the member rule (tabs only — the quieter
-  side) and the payload leaves `member` out (the phone then counts it: an over-count beats a silent miss).
+  row state. **A read error is treated as "member, unknown"**: ~~the gate applies the member rule (tabs only — the quieter
+  side)~~ the gate treats it as **not a member** *(member spec R4, 2026-10-17)* and the payload leaves `member` out (the
+  phone then counts it: an over-count beats a silent miss).
 - **Agent pushes** carry **`purdex.member: true`** when `Membership` says member; absent otherwise.
 - **Gate** (`gate.go` `DeviceWants`), after rules 5-6:
-  - a member session pushes only when its code is in the device's `prefs.tabs` (whatever `notify_without_tab` says);
+  - ~~a member session pushes only when its code is in the device's `prefs.tabs` (whatever `notify_without_tab` says);~~
+    a member session's waiting / idle event is not pushed (push spec rule 4a, event stage); its error follows rules 5-6
+    like any session's *(member spec R1, 2026-10-17)*;
   - a session whose code is in the device's **`prefs.muted`** gets no agent push. Approval pushes ignore `muted`.
   - `Membership` is read once per event (not per device), before the device loop, single-flight with a 250 ms
     budget: a read still running, or one past the budget, is "member, unknown" (as a read error), so a busy `team.db`
@@ -115,7 +121,8 @@ A window's report (§3.2), built by a pure `badgeReport(...)`:
 - `sessions` ⊇ U: every `hostId:code` with `unread[k] === true` whose session is shown by a **live** pane of any tab
   in that window's tab store (`paneAgentKey` over every leaf of every tab, every workspace; a terminated pane does
   not count — `tabAgentPanes` keeps a terminated primary pane's key for the lights, and a tmux restart reuses codes).
-  Worker panes (`exec-<id>` keys) count the same way.
+  Worker panes (`exec-<id>` keys) count the same way. A team member's key is left out of U *(member spec R2,
+  2026-10-17)*; a member's resolved card still adds its key below.
 - `cards`: every open card, from `useApprovalStore` (all non-hook kinds) and a new hook-card slice fed by the same
   `approval.request` events `approval-ws.ts` now drops (`hook_ask`, `hook_permission`; snapshot replaces the host's
   set, opened adds, closed removes; the existing hook handling is untouched).
