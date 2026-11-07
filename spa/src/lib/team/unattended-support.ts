@@ -20,7 +20,7 @@ import { useDialogueStore } from '../../stores/useDialogueStore'
 import { DIALOGUE_CAPABILITY } from '../dialogue/types'
 import { NOTIFY_GROUP_LABELS_CAPABILITY } from '../notify/types'
 import { STAGES_CAPABILITY } from '../conversations/types'
-import { TEAM_MAX_MEMBERS_V2_CAPABILITY, PERSON_CAPABILITY, RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, TEAM_PAUSE_CAPABILITY, UNANSWERED_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
+import { COMPACTION_CAPABILITY, TEAM_MAX_MEMBERS_V2_CAPABILITY, PERSON_CAPABILITY, RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, TEAM_PAUSE_CAPABILITY, UNANSWERED_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
 
@@ -52,6 +52,7 @@ export function startUnattendedSupport(): () => void {
         useUnattendedStore.getState().setStagesSupport(hostId, listed.includes(STAGES_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setMaxMembersV2Support(hostId, listed.includes(TEAM_MAX_MEMBERS_V2_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setNotifyGroupLabelsSupport(hostId, listed.includes(NOTIFY_GROUP_LABELS_CAPABILITY) ? 'yes' : 'no')
+        useUnattendedStore.getState().setCompactionSupport(hostId, listed.includes(COMPACTION_CAPABILITY) ? 'yes' : 'no')
         useDialogueStore.getState().setSupport(hostId, listed.includes(DIALOGUE_CAPABILITY))
       },
       () => { // not retried until the next trigger; the probe's flags stay unknown rather than keeping an old 'yes'

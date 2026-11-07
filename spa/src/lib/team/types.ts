@@ -456,6 +456,9 @@ export const TEAM_MAX_MEMBERS_CAPABILITY = 'team.max_members.v1'
 /** The daemon lets the App edit a live team's name, label and colour (`PUT /api/team/appearance`, TR-1). */
 export const TEAM_EDIT_CAPABILITY = 'team.edit.v1'
 
+/** The daemon stores per-session compaction settings (`GET`/`PUT /api/team/compaction/{id}`). */
+export const COMPACTION_CAPABILITY = 'team.compaction.v1'
+
 /** The daemon pauses unattended sessions whose relay quota ran out and lets the App release them (`GET /api/team/paused`, UP-5b). */
 export const TEAM_PAUSE_CAPABILITY = 'team.pause.v1'
 
