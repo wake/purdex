@@ -67,10 +67,10 @@ const wb = { busy: false, again: false, scheduled: false, gen: 0, wait: 0 }
 // `loop` is the wb.gen it runs under (0: none), so a session end or switch ends it and the new session starts its own.
 const pq = { loop: 0 }
 
+let compactNowWanted = false // pdx compact --now asked for a compaction at the end of the running turn (dropped when the session changes id)
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
 // acked, and droppedTotal counts the events this stream lost — never reset (spec §6.2).
-let compactNowWanted = false // pdx compact --now asked for a compaction at the end of the running turn (dropped when the session changes id)
 const ev = {
   on: false,
   sock: '',
@@ -587,15 +587,22 @@ function pqCompact($) {
   return pqOut('accepted', 'now')
 }
 
+// The flag is consumed when the tick is scheduled: an aborted and a completed turn end for one turn must not compact twice.
+function compactNowAtTurnEnd($) {
+  if (!compactNowWanted) return
+  compactNowWanted = false
+  $.clock.after(0, () => compactNowTick($))
+}
+
 function compactNowTick($) {
   void compactNow($).catch((err) => log($, 'compact now failed: ' + String(err)))
 }
 
 // A call the engine refuses while a turn runs (by this mod's own turn tracking) waits for the next turn end; any other failure is only logged.
 async function compactNow($) {
-  compactNowWanted = false
   try {
-    await $.session.compact({})
+    const r = await $.session.compact({})
+    if (r && r.skip !== undefined) log($, 'compact now skipped: ' + String(r.skip))
   } catch (err) {
     if (ev.turnId) compactNowWanted = true
     else log($, 'compact now refused: ' + String(err))
@@ -814,7 +821,7 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
-    if (compactNowWanted) $.clock.after(0, () => compactNowTick($))
+    compactNowAtTurnEnd($)
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
@@ -831,7 +838,7 @@ function turnAborted($, turnId) {
   rememberClosed(turnId)
   ev.turnId = ''
   ev.asks.clear()
-  if (compactNowWanted) $.clock.after(0, () => compactNowTick($))
+  compactNowAtTurnEnd($)
   enqueue($, 'turn.complete', { turn_id: turnId, reason: 'aborted', duration_ms: 0, aborted: true })
 }
 

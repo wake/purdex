@@ -149,7 +149,7 @@ func (m *Module) compactNow(w http.ResponseWriter, r *http.Request, mr memberRow
 		return
 	default:
 		m.logf("[team] member compaction now %s: %+v %v", mr.SessionID, res, err)
-		m.writeErr(w, http.StatusConflict, team.ErrCompactFailed, "the member's mod did not take the compact job ("+res.Status+")", nil)
+		m.writeErr(w, http.StatusConflict, team.ErrCompactFailed, fmt.Sprintf("the member's mod did not take the compact job (%s %s) %v", res.Status, res.Reason, err), nil)
 		return
 	}
 	v, err := m.compactionView(mr.SessionID)

@@ -2964,7 +2964,21 @@ test('a failed call is not tried again at the next turn end', async ($, on) => {
   g.open()
   await w.clock.settle()
   expect(w.compactCalls.length).toBe(1)
+  expect(w.logs.some((l) => l.includes('compact now skipped: no'))).toBe(true) // a veto leaves a trace
   await endTurn($, w, 't1')
+  expect(w.compactCalls.length).toBe(1)
+})
+
+test('an aborted and a completed turn end for one turn compact once', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g)
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1', { reason: 'aborted', isAborted: true })
+  await turnDone($, 't1') // both hooks before the timer runs
+  await w.clock.settle()
   expect(w.compactCalls.length).toBe(1)
 })
 
