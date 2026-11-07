@@ -105,6 +105,8 @@ func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
 			h.workbookRefresh(w, r)
 		case WorkbookResultPath:
 			h.workbookResult(w, r)
+		case CompactContextPath:
+			h.compactContext(w, r)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		}

@@ -17,6 +17,7 @@ const jobsKey = "workbook.jobs"
 type jobsService struct{ m *Module }
 
 var _ modevents.WorkbookService = jobsService{}
+var _ modevents.CompactContextService = jobsService{}
 
 func (s jobsService) channel() *channel {
 	s.m.mu.Lock()
