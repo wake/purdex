@@ -51,7 +51,7 @@
 // prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
-import { backgroundBusy, compactionPolicy, registerEvents, setRelayStateProbe } from './events.js'
+import { backgroundBusy, compactionPolicy, registerEvents, setCompactNowGate } from './events.js'
 import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, parseTeamNames, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
@@ -1953,7 +1953,7 @@ export function register(on) {
   // The event reporter (interface U1 spec §6.5): unmatched on events this module does not
   // hook, matched on the ones it does; registered first, so its hooks wrap the relay's.
   registerEvents(on)
-  setRelayStateProbe(() => s.state)
+  setCompactNowGate(() => (s.state !== 'idle' ? 'relay ' + s.state : s.compactBusy ? 'auto compaction' : ''))
   registerGate(on) // tool.call{Bash} only: host load control for the calls the PATH shims cannot see
 
   // The member-relay control message (P6-6, M1): consumed whatever the state (codex finding 1), so the model never

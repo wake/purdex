@@ -3,14 +3,7 @@
 // presses add up). Clamped 1–100 (the buttons are off at the ends). No input box, so no draft to lose on a tab switch.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { StepButton } from '../team/Steppers'
-
-export const THRESHOLD_STEP = 5
-export const THRESHOLD_MIN = 1
-export const THRESHOLD_MAX = 100
-
-export function clampThreshold(v: number): number {
-  return Math.min(THRESHOLD_MAX, Math.max(THRESHOLD_MIN, v))
-}
+import { THRESHOLD_MAX, THRESHOLD_MIN, THRESHOLD_STEP } from '../../lib/threshold'
 
 export function ThresholdStepper({ value, onStep, disabled, label, testId }: {
   value: number; onStep: (delta: number) => void; disabled?: boolean; label: string; testId?: string
