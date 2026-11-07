@@ -57,6 +57,10 @@ type W = {
   abort: (e: any) => any // turn.abort beneath the mod: undefined, or { deny } when no turn is running
   abortCalls: any[]
   wbRefresh: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to POST /workbook/refresh
+  ctxReqs: any[] // the POSTs to dialogue/compact-context, never mixed with the event batches
+  compactContext: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to it (default 204)
+  appends: any[] // session.append calls beneath the mod
+  append?: (e: any) => any // overrides the answer to session.append (default: the row is written)
 }
 
 const teamAnswer = (role: string, members = 0, label = ''): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label }) })
@@ -74,6 +78,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     fork: () => ({ isAnswered: true, text: '{"status":"s","todos":{"done":[],"dropped":[],"add":[]}}', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }), forkCalls: [], registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
     submit: (e: any) => ({ text: e.text }), submitCalls: [], composer: '', readCalls: [], fillCalls: [], abort: () => undefined, abortCalls: [],
     wbRefresh: () => ({ status: 202, text: '{"entry_id":7}' }),
+    ctxReqs: [], compactContext: () => ({ status: 204 }), appends: [],
     daemon: ackAll,
     bash: () => BASH_OK,
     compact: (e: any) => ({ messages: e.messages }),
@@ -88,6 +93,13 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
       const a = await w.team(sid, w.gets.length)
       if ('deny' in a) return { deny: a.deny }
       return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
+    }
+    if (String(e.url).includes('/mod/v1/dialogue/')) { // the compact context (compact-inject-recap)
+      const cb = JSON.parse(e.init.body)
+      w.ctxReqs.push(cb)
+      const ca = await w.compactContext(cb, w.ctxReqs.length)
+      if ('deny' in ca) return { deny: ca.deny }
+      return { value: { status: ca.status, ok: ca.status >= 200 && ca.status < 300, headers: { 'content-type': 'application/json' }, text: ca.text ?? '' } }
     }
     if (String(e.url).includes('/mod/v1/prompt/')) { // the prompt routes (U3-0b)
       const pb = JSON.parse(e.init.body)
@@ -163,6 +175,10 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     w.forkCalls.push(e)
     const r = await w.fork(e, w.forkCalls.length)
     return r && 'deny' in r ? { deny: r.deny } : { value: r }
+  })
+  on('session.append', async (_$: any, e: any, next: any) => { // only the message is kept: the engine adds role, isMeta, uuid
+    w.appends.push({ message: { type: e.message.type, content: e.message.content } })
+    return w.append ? w.append(e) : next(e)
   })
   on('command.register', async (_$: any, e: any) => { w.registered.push(e.name); return { value: { command: e.name } } })
   on('ui.log', async (_$: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
@@ -963,6 +979,169 @@ test('a compaction reports compact.start and compact.end, and the heartbeat says
     ['compact.start', { trigger: 'manual' }], ['compact.end', { trigger: 'manual', ok: true }],
     ['compact.start', { trigger: 'auto', agent_id: 'ag-1' }], ['compact.end', { trigger: 'auto', agent_id: 'ag-1', ok: true }],
   ])
+})
+
+// ---- the compact context: the recap goes into the conversation after a compaction ----
+
+const CMSGS = [{ role: 'user', text: 'hi', toolUses: [] }]
+const CTX_OK = (text = 'RECAP'): Answer => ({ status: 200, text: JSON.stringify({ text }) })
+const compactOf = ($: any, trigger = 'manual', more: any = {}) => $.session.compact({ trigger, messages: CMSGS, ...more } as any)
+const APPENDED = (text: string) => ({ message: { type: 'user', content: [{ type: 'text', text }] } })
+
+test('a compaction asks for the context and appends it a second after the hook returned', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(999)
+  expect(w.ctxReqs).toEqual([{ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1 }])
+  expect(w.appends).toEqual([])
+  await w.clock.advance(1)
+  expect(w.appends).toEqual([APPENDED('RECAP')])
+})
+
+test('the compaction does not wait for the daemon', async ($, on) => {
+  let open!: (a: Answer) => void
+  const door = new Promise<Answer>((r) => { open = r })
+  const w = evWorld(on, { compactContext: () => door })
+  await start($, w)
+  await compactOf($) // returns although the daemon has not answered
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+  open(CTX_OK('LATE'))
+  await w.clock.advance(1)
+  expect(w.appends).toEqual([APPENDED('LATE')])
+})
+
+test('an answer that comes before the compaction ends still waits the second', async ($, on) => {
+  let release!: () => void
+  const w = evWorld(on, { compactContext: () => CTX_OK(), compact: (e) => new Promise((r) => { release = () => r({ messages: e.messages }) }) })
+  await start($, w)
+  const c = compactOf($)
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+  release()
+  await c
+  await w.clock.advance(999)
+  expect(w.appends).toEqual([])
+  await w.clock.advance(1)
+  expect(w.appends.length).toBe(1)
+})
+
+test('the hook hands back what the compaction returned, unchanged', async ($, on) => {
+  const out = { messages: CMSGS, extra: { a: 1 } }
+  const w = evWorld(on, { compact: () => out, compactContext: () => CTX_OK() })
+  await start($, w)
+  expect(await compactOf($)).toEqual(out)
+})
+
+test('a subagent’s compaction and a precompute ask for nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($, 'auto', { agentId: 'ag-1' })
+  await compactOf($, 'precompute')
+  await w.clock.advance(5000)
+  expect(w.ctxReqs).toEqual([])
+  expect(w.appends).toEqual([])
+})
+
+test('a compaction skipped beneath appends nothing', async ($, on) => {
+  const w = evWorld(on, { compact: () => ({ skip: 'no' }), compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+})
+
+test('a member’s idle compaction stopped by the relay appends nothing', async ($, on) => {
+  const hello = JSON.stringify({ ok: true, role: 'member', self_relay: 'on', threshold: 70, min_growth: 20000, idle_intercept: 1 })
+  const w = evWorld(on, { compactContext: () => CTX_OK(), pdx: (argv) => (argv[0] === 'relay' && argv[1] === 'hello' ? { exitCode: 0, stdout: hello } : { exitCode: 0, stdout: '{}' }) })
+  await start($, w)
+  const r = await compactOf($, 'auto')
+  expect(r.skip).toBeDefined() // the relay stopped it: the engine never compacts
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+})
+
+for (const [name, answer] of [
+  ['204', { status: 204 }], ['an error status', { status: 500, text: '{}' }], ['broken JSON', { status: 200, text: '{' }],
+  ['an empty text', { status: 200, text: '{"text":""}' }], ['a refused fetch', { deny: 'no' }],
+] as [string, Answer][]) {
+  test(`${name} appends nothing and the compaction stands`, async ($, on) => {
+    const w = evWorld(on, { compactContext: () => answer })
+    await start($, w)
+    expect(await compactOf($)).toEqual({ messages: CMSGS })
+    await w.clock.advance(5000)
+    expect(w.appends).toEqual([])
+  })
+}
+
+test('a session that moved on before the second is up appends nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+})
+
+test('with the reporter off nothing is asked', async ($, on) => {
+  const w = evWorld(on, { pdxJSON: PDX_JSON_OLD, compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(5000)
+  expect(w.ctxReqs).toEqual([])
+  expect(w.appends).toEqual([])
+})
+
+test('the executor is told to look for the recap job', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await compactOf($)
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(1)
+})
+
+test('a busy executor does not hold the compaction or the append', async ($, on) => {
+  let finish!: () => void
+  const busy = new Promise<any>((r) => { finish = () => r({ isAnswered: true, text: '{}', usage: USAGE }) })
+  const w = evWorld(on, { compactContext: () => CTX_OK('OLD'), wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }), model: (_e, n) => (n === 1 ? busy : { isAnswered: true, text: '{}', usage: USAGE }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle() // the executor runs a model job that does not end
+  expect(w.modelCalls.length).toBe(1)
+  expect(await compactOf($)).toEqual({ messages: CMSGS }) // the compaction is not held
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('OLD')]) // nor the append
+  expect(nextReqs(w).length).toBe(1)
+  finish()
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(2) // the executor asks again: the recap job can be taken now
+})
+
+test('a refused append is logged and not tried again', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK(), append: () => ({ deny: 'nope' }) })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(5000)
+  expect(w.appends.length).toBe(1)
+  expect(w.logs.some((l) => l.includes('append refused') && l.includes('nope'))).toBe(true)
+})
+
+test('two compactions in a row each append their own', async ($, on) => {
+  let open!: (a: Answer) => void
+  const first = new Promise<Answer>((r) => { open = r })
+  const w = evWorld(on, { compactContext: (_b, n) => (n === 1 ? first : CTX_OK('B')) })
+  await start($, w)
+  await compactOf($)
+  await compactOf($) // the first one's answer has not come yet
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('B')])
+  open(CTX_OK('A'))
+  await w.clock.advance(1)
+  expect(w.appends).toEqual([APPENDED('B'), APPENDED('A')])
 })
 
 // ---- AskUserQuestion with the reporter on: ask.js's hook outside, the reporter's inside ----

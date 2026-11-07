@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, COMPACT_APPEND_DELAY_MS, COMPACT_CONTEXT_URL, COMPACT_CONTEXT_WAIT_MS, compactContextBody, parseCompactContext, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -972,11 +972,52 @@ async function onSessionSwitch($, e, next) {
   }
 }
 
+// ---- the compact context: the recap goes into the conversation after a compaction (spec §4) ----
+// The hook never waits for the daemon: the compaction (5-18 s) and the recap (about 4 s) run at once. The text is put in
+// as a meta row COMPACT_APPEND_DELAY_MS after the hook returned (an earlier row can be lost to the compaction's boundary).
+
+// compactInjectStart: only the main conversation's own compaction; returns the job, or null.
+function compactInjectStart($, e) {
+  if (e.agentId || e.trigger === 'precompute') return null
+  let settle = () => {}
+  const text = new Promise((resolve) => { settle = resolve })
+  const job = { gen: wb.gen, text, settle }
+  $.clock.after(0, () => compactFetchTick($, job))
+  return job
+}
+
+// compactFetchTick tells the executor to look for the recap job, then asks for the text.
+function compactFetchTick($, job) {
+  wbAsk($, WAIT_MS)
+  void compactFetch($, job).catch((err) => { log($, 'compact context failed: ' + String(err)); job.settle('') })
+}
+
+async function compactFetch($, job) {
+  const out = await wbRequest($, COMPACT_CONTEXT_URL, compactContextBody(ev.stream, ev.sid), COMPACT_CONTEXT_WAIT_MS)
+  job.settle(out && out !== TIMEOUT && out.res ? parseCompactContext(out.res) : '')
+}
+
+function compactInjectLater($, job) {
+  $.clock.after(COMPACT_APPEND_DELAY_MS, () => compactAppendTick($, job))
+}
+
+function compactAppendTick($, job) {
+  void compactAppend($, job).catch((err) => log($, 'compact context append failed: ' + String(err)))
+}
+
+async function compactAppend($, job) {
+  const text = await job.text
+  if (!text || job.gen !== wb.gen || !ev.on) return
+  const r = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+  if (isObject(r) && r.deny !== undefined) log($, 'compact context append refused: ' + String(r.deny))
+}
+
 // onCompact wraps the relay's compact hook (registered before it, so outside): ok is false
 // exactly when the compaction did not happen (a hook beneath answered {skip}).
 async function onCompact($, e, next) {
   if (!ev.on) return next(e)
   compactStarted($, e)
+  const job = compactInjectStart($, e)
   let ok = false
   try {
     const r = await next(e)
@@ -984,6 +1025,7 @@ async function onCompact($, e, next) {
     return r
   } finally {
     compactEnded($, e, ok)
+    if (ok && job) compactInjectLater($, job)
   }
 }
 

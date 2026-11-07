@@ -215,3 +215,24 @@ export function promptResultBody(stream, jobId, status, reason, extra) {
   if (extra && extra.truncated === true) b.truncated = true
   return JSON.stringify(b)
 }
+
+// ---- the compact context (compact-inject-recap spec §4) ----
+
+export const COMPACT_CONTEXT_URL = 'http://pdx/mod/v1/dialogue/compact-context'
+export const COMPACT_CONTEXT_WAIT_MS = 30_000 // the daemon waits up to about 28 s for the recap to end
+export const COMPACT_APPEND_DELAY_MS = 1000 // a row appended sooner than this after the hook returned can be lost to the compaction
+
+export function compactContextBody(stream, sessionId) {
+  return JSON.stringify({ stream, session_id: sessionId })
+}
+
+// parseCompactContext reads the answer: the text to put into the conversation, or '' (204, an error, anything else).
+export function parseCompactContext(res) {
+  if (!res || res.status !== 200) return ''
+  try {
+    const o = JSON.parse(res.text)
+    return isObject(o) && typeof o.text === 'string' ? o.text : ''
+  } catch {
+    return ''
+  }
+}
