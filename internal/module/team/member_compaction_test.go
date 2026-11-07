@@ -92,3 +92,65 @@ func TestTeamList_CompactionOnlyForActiveLocalMembers(t *testing.T) {
 		}
 	}
 }
+
+func TestMemberCompaction_OnlyActiveMembers(t *testing.T) {
+	for _, st := range []team.MemberState{team.MemberKilled, team.MemberReleased} {
+		f, root := newTeamFixture(t, 1)
+		m1 := f.member(1, root, "sid-m1", "w-one", nil)
+		if err := f.m.store.SetMemberState(m1.SpawnOp, st, 9); err != nil {
+			t.Fatal(err)
+		}
+		for name, set := range map[string]*team.CompactionOverride{"read": nil, "set": {Threshold: ptr(40)}} {
+			if code, _, e := f.memberCompaction("/tmp/10.sock", m1.Ref, set, false); code != 409 || e.Error != team.ErrNotYourMember {
+				t.Fatalf("%s %s = %d %+v, want 409 not_your_member", st, name, code, e)
+			}
+		}
+		if got, _ := f.m.store.CompactionOverride("sid-m1"); got != (team.CompactionOverride{}) {
+			t.Fatalf("%s: a refused set wrote %+v", st, got)
+		}
+	}
+}
+
+func TestMemberCompaction_RefusedDuringARelay(t *testing.T) {
+	cases := map[string]string{
+		"own session": `INSERT INTO relay_ops (id, kind, host_id, session_id, ref, state, handoff_path, created_at, updated_at)
+			VALUES ('r1', 'member', 'h:1', 'sid-m1', '_r', 'writing', '/p', 1, 1)`,
+		"cleared into it": `INSERT INTO relay_ops (id, kind, host_id, session_id, new_session_id, ref, state, handoff_path, created_at, updated_at)
+			VALUES ('r1', 'member', 'h:1', 'sid-old', 'sid-m1', '_r', 'cleared', '/p', 1, 1)`,
+	}
+	for name, q := range cases {
+		f, root := newTeamFixture(t, 1)
+		m1 := f.member(1, root, "sid-m1", "w-one", nil)
+		if _, err := f.m.store.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+		for what, set := range map[string]*team.CompactionOverride{"set": {Threshold: ptr(40)}, "reset": nil} {
+			code, _, e := f.memberCompaction("/tmp/10.sock", m1.Ref, set, what == "reset")
+			if code != 409 || e.Error != team.ErrRelayOpen || e.Op == nil {
+				t.Fatalf("%s %s = %d %+v, want 409 relay_open with the op", name, what, code, e)
+			}
+		}
+		if got, _ := f.m.store.CompactionOverride("sid-m1"); got != (team.CompactionOverride{}) {
+			t.Fatalf("%s: wrote %+v", name, got)
+		}
+		if code, _, e := f.memberCompaction("/tmp/10.sock", m1.Ref, nil, false); code != 200 {
+			t.Fatalf("%s: read = %d %+v, want 200", name, code, e)
+		}
+	}
+}
+
+func TestMemberCompaction_UnreadableViewWritesNothing(t *testing.T) {
+	f, root := newTeamFixture(t, 1)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	// auto holds text: reading the override (hence the view) fails.
+	if _, err := f.m.store.db.Exec(`INSERT INTO session_compaction (session_id, auto, threshold, idle, updated_at) VALUES ('sid-m1', 'x', NULL, NULL, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.memberCompaction("/tmp/10.sock", m1.Ref, &team.CompactionOverride{Threshold: ptr(40)}, false); code != 500 {
+		t.Fatalf("set on an unreadable view = %d, want 500", code)
+	}
+	var th *int
+	if err := f.m.store.db.QueryRow(`SELECT threshold FROM session_compaction WHERE session_id = 'sid-m1'`).Scan(&th); err != nil || th != nil {
+		t.Fatalf("threshold = %v err=%v, want untouched NULL", th, err)
+	}
+}
