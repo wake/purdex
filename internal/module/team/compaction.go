@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -76,6 +77,35 @@ func checkCompactionOverride(o team.CompactionOverride) error {
 	return nil
 }
 
+// isJSONObject: the top-level value is an object (not null, an array, a scalar or empty).
+func isJSONObject(b []byte) bool {
+	t, err := json.NewDecoder(bytes.NewReader(b)).Token()
+	return err == nil && t == json.Delim('{')
+}
+
+// duplicateTopKey finds a repeated key of the top-level object; the values are all scalars here, so a flat walk is enough.
+func duplicateTopKey(b []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	_, _ = dec.Token()
+	seen := map[string]bool{}
+	for dec.More() {
+		k, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		key, _ := k.(string)
+		if seen[key] {
+			return key, true
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return "", false
+		}
+	}
+	return "", false
+}
+
 func (m *Module) writeCompactionView(w http.ResponseWriter, sid string) {
 	v, err := m.compactionView(sid)
 	if err != nil {
@@ -95,8 +125,12 @@ func (m *Module) handleCompactionGet(w http.ResponseWriter, r *http.Request) {
 func (m *Module) handleCompactionPut(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, bodyCap+1))
 	var fields map[string]json.RawMessage
-	if err != nil || len(body) > bodyCap || json.Unmarshal(body, &fields) != nil {
+	if err != nil || len(body) > bodyCap || !isJSONObject(body) || json.Unmarshal(body, &fields) != nil {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "body must be a JSON object", nil)
+		return
+	}
+	if dup, ok := duplicateTopKey(body); ok {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "duplicate field "+dup, nil)
 		return
 	}
 	var o team.CompactionOverride

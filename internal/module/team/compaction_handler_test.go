@@ -191,6 +191,10 @@ func TestCompactionPut_Rejects(t *testing.T) {
 		"auto not bool": `{"auto":"yes"}`,
 		"not an object": `[1]`,
 		"bad json":      `{`,
+		"null":          `null`,
+		"empty body":    ``,
+		"dup auto":      `{"auto":false,"auto":true}`,
+		"dup threshold": `{"threshold":10,"threshold":20}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)

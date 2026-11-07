@@ -77,7 +77,7 @@ func (s *Store) SetCompactionOverride(sessionID string, o team.CompactionOverrid
 
 // copyCompactionTx gives the successor session the predecessor's override; no source row, nothing to do.
 func copyCompactionTx(tx *sql.Tx, from, to string, now int64) error {
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO session_compaction (session_id, auto, threshold, idle, updated_at)
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO session_compaction (session_id, auto, threshold, idle, updated_at)
 		SELECT ?, auto, threshold, idle, ? FROM session_compaction WHERE session_id = ?`, to, now, from); err != nil {
 		return fmt.Errorf("copy compaction override %s -> %s: %w", from, to, err)
 	}

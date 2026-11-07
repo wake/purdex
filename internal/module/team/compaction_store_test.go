@@ -132,3 +132,19 @@ func TestOpenStore_AddsSessionCompactionToTheLiveSchema(t *testing.T) {
 		t.Fatalf("no session_compaction table: %v", err)
 	}
 }
+
+func TestReportRelay_ClearedKeepsTheSuccessorsOwnOverride(t *testing.T) {
+	s := openTestStore(t)
+	_ = s.SetCompactionOverride("old", team.CompactionOverride{Auto: ptr(false)}, 1)
+	_ = s.SetCompactionOverride("new", team.CompactionOverride{Threshold: ptr(33)}, 1)
+	op := selfOp("op", "old", "_aaaaaa", 1000)
+	op.State = team.RelayClaimed
+	if err := s.CreateRelayOp(op); err != nil {
+		t.Fatal(err)
+	}
+	mustReport(t, s, "op", RelayReport{State: team.RelayCleared, NewSessionID: "new", NewRef: "_bbbbbb", At: 2000})
+	got, _ := s.CompactionOverride("new")
+	if got.Auto != nil || got.Threshold == nil || *got.Threshold != 33 {
+		t.Fatalf("successor's override was overwritten: %+v", got)
+	}
+}
