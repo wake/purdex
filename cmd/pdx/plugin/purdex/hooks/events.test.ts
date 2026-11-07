@@ -2969,6 +2969,62 @@ test('a failed call is not tried again at the next turn end', async ($, on) => {
   expect(w.compactCalls.length).toBe(1)
 })
 
+// A scheduled tick belongs to the session it was scheduled for: a /clear before it fires must not compact the new session.
+test('an idle compact job whose timer has not fired yet does not compact the session a /clear started', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g)
+  await start($, w)
+  g.open()
+  await new Promise((r) => setTimeout(r, 30)) // real time: the job is accepted; the mocked clock has not run its 0 ms timer
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  expect(compactResult(w)).toMatchObject({ status: 'accepted', reason: 'now' })
+  expect(w.compactCalls.length).toBe(0)
+})
+
+test('a turn end that scheduled the tick, then a /clear before it fires, compacts nothing', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g)
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+})
+
+// A compaction at a turn end that also starts a relay would cancel the relay (the session.compact hook cancels an op that is
+// beginning or awaiting); the relay replaces the context anyway, so the compaction is dropped.
+test('a pending compact-now does not compact when a relay is starting at the same turn end', async ($, on) => {
+  const g = gated(CJOB())
+  const pdx = (argv: string[]) => {
+    if (argv[0] === 'relay' && argv[1] === 'hello') return { exitCode: 0, stdout: HELLO }
+    if (argv[0] === 'relay' && argv[1] === 'begin') return { exitCode: 0, stdout: JSON.stringify({ op: { id: 'op-1', kind: 'self', host_id: 'h', session_id: SID1, ref: '_abc123', state: 'awaiting_approval', handoff_path: '/data/relay/op-1.md', created_at: 1, updated_at: 1 }, request_id: 'req-1' }) }
+    if (argv[0] === 'relay' && argv[1] === 'wait') return never() as any
+    return { exitCode: 0, stdout: '{}' }
+  }
+  const w = cWorld(on, g, { pdx, usage: () => USAGE_AT(144000, 72) })
+  const argvs: string[][] = []
+  const inner = w.pdx
+  w.pdx = (argv: string[], ...rest: any[]) => { argvs.push(argv); return (inner as any)(argv, ...rest) }
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await w.clock.advance(100)
+  expect(argvs.some((a) => a[0] === 'relay' && a[1] === 'begin')).toBe(true) // the relay did start
+  expect(w.compactCalls.length).toBe(0)
+  expect(argvs.some((a) => a[0] === 'relay' && a[1] === 'report' && a.includes('cancelled'))).toBe(false)
+  expect(w.logs.some((l) => l.includes('compact now skipped: relay'))).toBe(true)
+})
+
 test('an aborted and a completed turn end for one turn compact once', async ($, on) => {
   const g = gated(CJOB())
   const w = cWorld(on, g)

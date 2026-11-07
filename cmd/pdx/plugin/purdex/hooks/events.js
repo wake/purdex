@@ -576,6 +576,10 @@ async function pqRead($) {
   return pqOut('accepted', '', text.length === cur.text.length ? { text } : { text, truncated: true })
 }
 
+// The relay state machine lives in register.js (which imports this file): it hands over a probe once, at register time.
+let relayStateProbe = () => 'idle' // no probe set: no relay
+export function setRelayStateProbe(fn) { relayStateProbe = fn }
+
 // pqCompact (pdx compact --now): a running turn compacts when it ends (compactNowWanted), an idle session from a timer, so the report
 // goes out first and the engine's call never runs inside the job.
 function pqCompact($) {
@@ -583,28 +587,37 @@ function pqCompact($) {
     compactNowWanted = true
     return pqOut('accepted', 'turn_end')
   }
-  $.clock.after(0, () => compactNowTick($))
+  const gen = wb.gen
+  $.clock.after(0, () => compactNowTick($, gen))
   return pqOut('accepted', 'now')
 }
 
 // The flag is consumed when the tick is scheduled: an aborted and a completed turn end for one turn must not compact twice.
-function compactNowAtTurnEnd($) {
+// Called by register.js once its turn-end relay decision has settled (a relay that begins takes the state first, and compact-now yields);
+// turnAborted calls it itself (an interrupt has no relay step).
+export function compactNowAtTurnEnd($) {
   if (!compactNowWanted) return
   compactNowWanted = false
-  $.clock.after(0, () => compactNowTick($))
+  const gen = wb.gen
+  $.clock.after(0, () => compactNowTick($, gen))
 }
 
-function compactNowTick($) {
-  void compactNow($).catch((err) => log($, 'compact now failed: ' + String(err)))
+function compactNowTick($, gen) {
+  void compactNow($, gen).catch((err) => log($, 'compact now failed: ' + String(err)))
 }
 
 // A call the engine refuses while a turn runs (by this mod's own turn tracking) waits for the next turn end; any other failure is only logged.
-async function compactNow($) {
+// A tick belongs to the session (wb.gen) it was scheduled for, and yields to a relay: the session.compact hook cancels an op that is
+// beginning or awaiting, and the relay replaces the context anyway.
+async function compactNow($, gen) {
+  if (wb.gen !== gen) { log($, 'compact now dropped: session changed'); return }
+  const relay = relayStateProbe()
+  if (relay !== 'idle') { log($, 'compact now skipped: relay ' + relay); return }
   try {
     const r = await $.session.compact({})
     if (r && r.skip !== undefined) log($, 'compact now skipped: ' + String(r.skip))
   } catch (err) {
-    if (ev.turnId) compactNowWanted = true
+    if (ev.turnId && wb.gen === gen) compactNowWanted = true
     else log($, 'compact now refused: ' + String(err))
   }
 }
@@ -821,7 +834,6 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
-    compactNowAtTurnEnd($)
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
