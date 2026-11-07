@@ -2819,3 +2819,63 @@ test('a plugin compaction is reported as manual', async ($, on) => {
   const rep = argvs.find((a) => a[0] === 'relay' && a[1] === 'compacted')
   expect(rep?.slice(0, 6)).toEqual(['relay', 'compacted', '--session', expect.any(String), '--trigger', 'manual'])
 })
+
+test('percent without tokens does not compact; the next turn with tokens does', async ($, on) => {
+  let u: any = USAGE_AT(0, 72)
+  u = { startedAt: 0, context: { window: 200000, percent: 72 }, rateLimits: [] }
+  const w = autoWorld(on, { usage: () => u })
+  await start($, w)
+  await endTurn($, w, 't1')
+  expect(w.compactCalls.length).toBe(0)
+  u = USAGE_AT(144000, 72)
+  await endTurn($, w, 't2')
+  expect(w.compactCalls.length).toBe(1)
+})
+
+test('a policy that turns auto off before the timer runs stops the compaction', async ($, on) => {
+  let pol = POLICY()
+  let flip = false
+  const w = autoWorld(on, { team: () => teamAnswer('none', 0, '', pol), usage: async () => { if (flip) { flip = false; pol = POLICY({ auto: false }); await w.clock.advance(1); await w.clock.settle() } return USAGE_AT(144000, 72) } })
+  await start($, w)
+  await w.clock.advance(14_999) // the next team poll is 1 ms away
+  await turnStart($, 't1')
+  flip = true // the read at the turn end advances the clock over the poll, which now answers auto:false
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+})
+
+test('a /clear before the timer runs stops the compaction', async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+})
+
+test('a manual compaction before the timer runs is the only one', async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await compactOf($)
+  await w.clock.settle()
+  expect(w.compactCalls).toEqual(['manual'])
+})
+
+test('a /clear resets the floor: the new session compacts at low tokens', async ($, on) => {
+  let tokens = 144000
+  const w = autoWorld(on, { usage: () => USAGE_AT(tokens, 72) })
+  await start($, w)
+  await endTurn($, w, 't1')
+  tokens = 150000
+  await endTurn($, w, 't2') // floor 150000
+  expect(w.compactCalls.length).toBe(1)
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  tokens = 145000
+  await endTurn($, w, 't3')
+  expect(w.compactCalls.length).toBe(2)
+})

@@ -131,6 +131,7 @@ const fresh = () => ({
   latchEpoch: 0, // bumped by everything that clears the latch (a reask, a /clear, a session reset): a begin answers 'paused' only for the epoch it was sent in
   compactFloor: undefined, // tokens read right after the last compaction: the mod compacts again only at floor + COMPACT_FLOOR_GROWTH (undefined after a reload)
   compactFloorPending: false, // a compaction ran: the next turn end's tokens become the floor
+  compactEpoch: 0, // bumped when a compaction starts and at a /clear: a scheduled auto compaction aborts if it moved
   compactBusy: false, // an auto-compaction call is out (or scheduled)
   pausedLatch: false, // the daemon paused this session (409 paused_no_quota): no self ask until a reask control or the next session.start
   reaskSeen: [], // the ids of reask controls already taken, oldest first (MAX_REASKS_SEEN)
@@ -1528,20 +1529,24 @@ async function maybeAutoCompact($, e) {
   if (!live() && !s.compactFloorPending) return
   const u = (await $.session.usage()).context
   if (s.compactFloorPending && u.tokens !== undefined) { s.compactFloor = u.tokens; s.compactFloorPending = false }
-  if (!live() || u.percent === undefined || u.percent < p.threshold) return
+  if (!live() || u.percent === undefined || u.percent < p.threshold || !Number.isFinite(u.tokens)) return // no tokens: no floor can form
   if (s.compactFloor !== undefined && !(u.tokens >= s.compactFloor + COMPACT_FLOOR_GROWTH)) return
   s.compactBusy = true
   const tokens = u.tokens
-  $.clock.after(0, () => { void autoCompactTick($, tokens) })
+  const at = { gen: s.gen, epoch: s.compactEpoch }
+  $.clock.after(0, () => { void autoCompactTick($, tokens, at) })
 }
 
-function autoCompactTick($, tokens) {
-  void autoCompact($, tokens).catch((err) => log($, 'auto compact failed: ' + String(err)))
+function autoCompactTick($, tokens, at) {
+  void autoCompact($, tokens, at).catch((err) => log($, 'auto compact failed: ' + String(err)))
 }
 
 // A refusal because a turn is running records nothing (the next turn end tries again); any other failure or a skip sets the floor to the tokens read.
-async function autoCompact($, tokens) {
+async function autoCompact($, tokens, at) {
   try {
+    const p = compactionPolicy()
+    if (!p || !p.managed || !p.auto) return // a team read changed the policy meanwhile
+    if (s.gen !== at.gen || s.compactEpoch !== at.epoch || s.compactFloorPending) return // a /clear or another compaction came first
     if (s.state !== 'idle' || s.turnRunning) return // a turn that started meanwhile: the engine would refuse, and the next turn end asks again
     const r = await $.session.compact({})
     if (r && r.skip !== undefined) s.compactFloor = tokens
@@ -2071,6 +2076,10 @@ export function register(on) {
     const p = s.pending
     disarmIdle()
     s.gen += 1 // a new session id: no begin sent under the old one answers for it
+    s.compactEpoch++
+    s.compactFloor = undefined
+    s.compactFloorPending = false
+    s.compactBusy = false
     s.control = [] // a control message named the old session id: it is the old conversation's
     s.helloOK = false // nor does the old session's hello: the new one is sent below
     if (s.state === 'clearing' && p) {
@@ -2201,6 +2210,7 @@ export function register(on) {
     const idleOff = s.interactive && !e.agentId && compactionPolicy()?.managed && compactionPolicy().idle === false
     if (idleOff && e.trigger === 'precompute') return { skip: SKIP_IDLE_OFF }
     if (!s.interactive || e.agentId || e.trigger === 'precompute') return next(e)
+    s.compactEpoch++
     disarmIdle()
     // Claude Code's idle compaction runs between turns; a context-full auto compaction runs inside one (spec §4.5). Only
     // told apart once hello advertised the feature (an older daemon does not know `idle`).
