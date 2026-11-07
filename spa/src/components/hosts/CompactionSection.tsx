@@ -7,7 +7,8 @@ import { HostConfigConflictError, type CompactionSet } from '../../lib/host-conf
 import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { clampThreshold, ThresholdStepper } from '../settings/ThresholdStepper'
+import { clampThreshold } from '../../lib/threshold'
+import { ThresholdStepper } from '../settings/ThresholdStepper'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 import { HostConfigNotice, HostConfigProblemNotice, useHostConfigGate } from './HostConfigNotice'
 
