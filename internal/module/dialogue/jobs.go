@@ -17,6 +17,7 @@ const jobsKey = "workbook.jobs"
 type jobsService struct{ m *Module }
 
 var _ modevents.WorkbookService = jobsService{}
+var _ modevents.CompactContextService = jobsService{}
 
 func (s jobsService) channel() *channel {
 	s.m.mu.Lock()
@@ -49,6 +50,11 @@ func (s jobsService) JobResult(stream string, r modevents.WorkbookResult) (bool,
 		Usage:     usage{In: r.Usage.Input, Out: r.Usage.Output, CacheRead: r.Usage.CacheRead},
 		LatencyMS: r.LatencyMS,
 	})
+}
+
+// CompactContext is the text a compaction hands the agent (compact_context.go); false: nothing to hand over.
+func (s jobsService) CompactContext(ctx context.Context, sid string) (string, bool) {
+	return s.m.compactContext(ctx, sid, compactRecapWait)
 }
 
 func (s jobsService) JobWaiting(sessionID string) bool {

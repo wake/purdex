@@ -1,0 +1,18 @@
+{"n":1,"t":1794017009488,"kind":"turn.complete","data":{"reason":"answer"}}
+{"n":2,"t":1794017009549,"kind":"compact.in","data":{"trigger":"plugin","nMsgs":3}}
+{"n":3,"t":1794017010901,"kind":"parallel.done","data":{"ms":1322,"answered":true,"text":"PARALLEL-OK"}}
+{"n":4,"t":1794017014276,"kind":"compact.out","data":{"ms":4697,"nMsgs":1,"before":58520,"after":14963}}
+{"n":5,"t":1794017014584,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-DELAY-1 (appended 300 ms after the hook returned, trigger plugin)"}]},"uuid":"6736c06d-7767-4399-8bfd-53771c7ca9de"}}
+{"n":6,"t":1794017036260,"kind":"compact.in","data":{"trigger":"auto","nMsgs":19}}
+{"n":7,"t":1794017037450,"kind":"parallel.done","data":{"ms":1188,"answered":true,"text":"PARALLEL-OK"}}
+{"n":8,"t":1794017053180,"kind":"compact.out","data":{"ms":16918,"nMsgs":5,"before":116413,"after":19736}}
+{"n":9,"t":1794017053488,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-DELAY-2 (appended 300 ms after the hook returned, trigger auto)"}]},"uuid":"74ccd2df-8b65-49ef-8331-a8acaf933c44"}}
+{"n":10,"t":1794017066581,"kind":"compact.in","data":{"trigger":"auto","nMsgs":20}}
+{"n":11,"t":1794017067770,"kind":"parallel.done","data":{"ms":1187,"answered":true,"text":"PARALLEL-OK"}}
+{"n":12,"t":1794017079397,"kind":"compact.out","data":{"ms":12814,"nMsgs":5,"before":122887,"after":20146}}
+{"n":13,"t":1794017079706,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-DELAY-3 (appended 300 ms after the hook returned, trigger auto)"}]},"uuid":"5949855d-6483-46de-a97c-ddb47aebcd2a"}}
+{"n":14,"t":1794017091666,"kind":"compact.in","data":{"trigger":"auto","nMsgs":20}}
+{"n":15,"t":1794017092830,"kind":"parallel.done","data":{"ms":1163,"answered":true,"text":"PARALLEL-OK"}}
+{"n":16,"t":1794017103719,"kind":"compact.out","data":{"ms":12052,"nMsgs":4,"before":122764,"after":20257}}
+{"n":17,"t":1794017104029,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-DELAY-4 (appended 300 ms after the hook returned, trigger auto)"}]},"uuid":"3cefc39b-4ccb-4c8e-83d8-1542de9e3fa3"}}
+{"n":18,"t":1794017106494,"kind":"turn.complete","data":{"reason":"answer"}}

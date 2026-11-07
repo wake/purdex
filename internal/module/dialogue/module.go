@@ -46,6 +46,7 @@ type Module struct {
 	lines *PushLines             // the push wait (registered at Init)
 	kinds map[string]kindHandler // extra kinds a test or T10 adds; Start adds the turn-summary kind
 	rc    *recapper              // decides when a recap is queued (created by Start)
+	turns turnsFromReader        // the transcript reader, for what a compaction hands the agent (set by Start)
 
 	stopReaper context.CancelFunc
 	reaperDone chan struct{}
@@ -205,7 +206,7 @@ func (m *Module) Start(context.Context) error {
 	go func() { defer close(done); ch.runReaper(ctx) }()
 	m.mu.Lock()
 	m.intake = in
-	m.jobs, m.stopReaper, m.reaperDone, m.rc = ch, cancel, done, rc
+	m.jobs, m.stopReaper, m.reaperDone, m.rc, m.turns = ch, cancel, done, rc, turns
 	m.unsubTurnEnd = sub.SubscribeTurnEnd(in.OnTurnEnd)
 	m.mu.Unlock()
 	return nil
@@ -232,7 +233,7 @@ func (m *Module) Stop(context.Context) error {
 	st, in, unsub := m.store, m.intake, m.unsubTurnEnd
 	ch, stopReaper, reaperDone := m.jobs, m.stopReaper, m.reaperDone
 	m.store, m.ready, m.intake, m.unsubTurnEnd = nil, false, nil, nil
-	m.jobs, m.stopReaper, m.reaperDone = nil, nil, nil
+	m.jobs, m.stopReaper, m.reaperDone, m.turns = nil, nil, nil, nil
 	if st != nil {
 		m.closing = st // released by Close, after the HTTP server drained
 	}

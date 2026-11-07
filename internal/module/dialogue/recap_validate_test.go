@@ -48,24 +48,24 @@ func TestParseRecap_Table(t *testing.T) {
 func TestRepairRecap_Limits(t *testing.T) {
 	long := func(n int) string { return strings.Repeat("字", n) }
 	o := repairRecap(recapOut{
-		Headline: long(70), Now: long(90), Next: long(70),
-		Done:    []string{long(50), "2", "3", "4", "5", "6", "7", "8"},
-		Decided: []string{long(41), "", "  "},
+		Headline: long(70), Now: long(200), Next: long(200),
+		Done:    []string{long(90), "2", "3", "4", "5", "6", "7", "8"},
+		Decided: []string{long(81), "", "  "},
 		Waiting: []string{"", "ok"},
 	})
 	if n := len([]rune(o.Headline)); n != 60 {
 		t.Errorf("headline %d", n)
 	}
-	if n := len([]rune(o.Now)); n != 80 {
+	if n := len([]rune(o.Now)); n != 160 {
 		t.Errorf("now %d", n)
 	}
-	if n := len([]rune(o.Next)); n != 60 {
+	if n := len([]rune(o.Next)); n != 160 {
 		t.Errorf("next %d", n)
 	}
-	if len(o.Done) != 6 || len([]rune(o.Done[0])) != 40 || o.Done[5] != "6" {
+	if len(o.Done) != 6 || len([]rune(o.Done[0])) != 80 || o.Done[5] != "6" {
 		t.Errorf("done = %v", o.Done)
 	}
-	if len(o.Decided) != 1 || len([]rune(o.Decided[0])) != 40 {
+	if len(o.Decided) != 1 || len([]rune(o.Decided[0])) != 80 {
 		t.Errorf("decided = %v", o.Decided)
 	}
 	if !reflect.DeepEqual(o.Waiting, []string{"ok"}) {
@@ -110,7 +110,7 @@ func TestRecapBlock_Format(t *testing.T) {
 // planCodeBlock returns the first code block after the plan's heading that starts with head.
 func planCodeBlock(t *testing.T, head string) string {
 	t.Helper()
-	raw, err := os.ReadFile("../../../docs/plans/2026-11-01-session-dialogue-log-plan.md")
+	raw, err := os.ReadFile("../../../docs/plans/2026-11-07-compact-inject-recap-plan.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func planCodeBlock(t *testing.T, head string) string {
 func TestRecapPrompt_MatchesPlanAppendix(t *testing.T) {
 	want := planCodeBlock(t, "### B-2 ")
 	if strings.TrimRight(recapPrompt, "\n") != want {
-		t.Fatalf("prompts/recap-v1.txt differs from plan appendix B-2")
+		t.Fatalf("prompts/recap-v2.txt differs from plan appendix B-2")
 	}
 	if !strings.Contains(want, `{"headline": "…", "done": ["…"]`) {
 		t.Fatal("extracted block is not the recap prompt")

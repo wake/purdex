@@ -69,6 +69,19 @@ describe('RecapView: recaps', () => {
     expect(within(items[1]).getByTestId('recap-sec-done')).toHaveTextContent('done 1a')
   })
 
+  it('names every trigger the daemon sends: every30 as 自動, compact as 壓縮時, anything else as is', async () => {
+    fetchRecaps.mockResolvedValue(resp([
+      recap(3, { trigger: 'weird' }), recap(2, { trigger: 'compact' }), recap(1, { trigger: 'every30' }),
+    ]))
+    mount()
+    await settle()
+    const items = screen.getAllByTestId('recap-item')
+    expect(items[0]).toHaveTextContent('· weird')
+    expect(items[1]).toHaveTextContent('· 壓縮時')
+    expect(items[2]).toHaveTextContent('· 自動')
+    expect(items[2]).not.toHaveTextContent('every30')
+  })
+
   it('leaves out an empty field (no 等你 box when nothing waits)', async () => {
     fetchRecaps.mockResolvedValue(resp([recap(1)]))
     mount()

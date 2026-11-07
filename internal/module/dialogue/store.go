@@ -144,6 +144,19 @@ func (s *Store) TurnNo(sid, turnID string) (int, bool, error) {
 	return n, true, nil
 }
 
+// TurnIDByNo returns the id of the turn with the number.
+func (s *Store) TurnIDByNo(sid string, no int) (string, bool, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT turn_id FROM dlg_turns WHERE session_id = ? AND turn_no = ?`, sid, no).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read dialogue turn: %w", err)
+	}
+	return id, true, nil
+}
+
 // TurnNos returns every turn number of a session by turn id (a rebuild keeps them).
 func (s *Store) TurnNos(sid string) (map[string]int, error) {
 	rows, err := s.db.Query(`SELECT turn_id, turn_no FROM dlg_turns WHERE session_id = ?`, sid)

@@ -2,9 +2,11 @@ package dialogue
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // What requestRecap answers.
@@ -39,11 +41,12 @@ type recapper struct {
 	broadcast func(typ, value string)
 
 	mu       sync.Mutex
-	inflight map[string]bool // sessions with a recap queued or running
+	inflight map[string]bool          // sessions with a recap queued or running
+	done     map[string]chan struct{} // closed when that session's recap ends, however it ends
 }
 
 func newRecapper(st *Store, w *Writer, logf func(format string, args ...any)) *recapper {
-	return &recapper{st: st, w: w, logf: logf, inflight: map[string]bool{}}
+	return &recapper{st: st, w: w, logf: logf, inflight: map[string]bool{}, done: map[string]chan struct{}{}}
 }
 
 func (r *recapper) log(format string, args ...any) {
@@ -55,11 +58,36 @@ func (r *recapper) log(format string, args ...any) {
 func (r *recapper) release(sid string) {
 	r.mu.Lock()
 	delete(r.inflight, sid)
+	if c, ok := r.done[sid]; ok {
+		close(c)
+		delete(r.done, sid)
+	}
 	r.mu.Unlock()
 }
 
+// wait blocks until the session's queued or running recap has ended (stored or not): true. Nothing in flight: true at
+// once. d or ctx ending first: false; the job is not touched and runs on.
+func (r *recapper) wait(ctx context.Context, sid string, d time.Duration) bool {
+	r.mu.Lock()
+	c, ok := r.done[sid]
+	r.mu.Unlock()
+	if !ok {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-c:
+		return true
+	case <-t.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // request queues a recap of the session's newest done summaries unless one is already queued or running, or there is
-// nothing newer than the last recap. trigger is every30 | open | manual.
+// nothing newer than the last recap. trigger is every30 | open | manual | compact.
 func (r *recapper) request(sid, trigger string) string {
 	r.mu.Lock()
 	if r.inflight[sid] {
@@ -67,6 +95,7 @@ func (r *recapper) request(sid, trigger string) string {
 		return recapQueued
 	}
 	r.inflight[sid] = true
+	r.done[sid] = make(chan struct{})
 	r.mu.Unlock()
 
 	payload, why := r.plan(sid, trigger)

@@ -20,6 +20,19 @@ func openTestStore(t *testing.T) (*Store, string) {
 	return s, path
 }
 
+func TestStore_TurnIDByNo(t *testing.T) {
+	s, _ := openTestStore(t)
+	if _, err := s.db.Exec(`INSERT INTO dlg_turns (session_id, turn_id, turn_no, segment, ended_at) VALUES ('s', 'tA', 4, 0, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok, err := s.TurnIDByNo("s", 4); err != nil || !ok || id != "tA" {
+		t.Fatalf("got %q %v %v", id, ok, err)
+	}
+	if _, ok, err := s.TurnIDByNo("s", 5); err != nil || ok {
+		t.Fatalf("missing: ok=%v err=%v", ok, err)
+	}
+}
+
 func userVersion(t *testing.T, db *sql.DB) int {
 	t.Helper()
 	var v int

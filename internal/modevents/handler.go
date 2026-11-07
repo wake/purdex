@@ -48,7 +48,9 @@ type handler struct {
 	promptPolls pollGate
 	// activePolls counts the long polls being served (hard cap maxPolls).
 	activePolls atomic.Int32
-	maxPolls    int
+	// activeCompact counts the compact-context requests being served (cap maxCompactContexts).
+	activeCompact atomic.Int32
+	maxPolls      int
 	// stop is closed when the daemon shuts the socket down: the long polls waiting for work answer at once (204), they do
 	// not hold the shutdown until their wait runs out. nil never fires.
 	stop <-chan struct{}
@@ -105,6 +107,8 @@ func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
 			h.workbookRefresh(w, r)
 		case WorkbookResultPath:
 			h.workbookResult(w, r)
+		case CompactContextPath:
+			h.compactContext(w, r)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		}

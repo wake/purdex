@@ -3401,6 +3401,7 @@
   "recap.trigger.auto": "自動",
   "recap.trigger.open": "打開時",
   "recap.trigger.manual": "手動",
+  "recap.trigger.compact": "壓縮時",
   "recap.sec.done": "完成",
   "recap.sec.now": "目前",
   "recap.sec.decided": "已定",

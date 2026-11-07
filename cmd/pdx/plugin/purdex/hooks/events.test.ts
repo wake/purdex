@@ -41,8 +41,6 @@ type W = {
   wbResult: (body: any, n: number) => Answer | Promise<Answer> // ... to `result` (default 200 {more:false})
   model: (e: any, n: number) => any // $.model.complete beneath the mod: a ModelCompleteResult, or { deny } for a refused call
   modelCalls: any[]
-  fork: (e: any, n: number) => any // $.model.fork beneath the mod (WB-2b-ii)
-  forkCalls: any[]
   registered: string[] // the slash commands the mod registered
   pqReqs: { url: string; body: any }[] // the POSTs to the prompt routes (U3-0b), never mixed with the event batches
   promptNext: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to prompt/next (default: a long poll that never answers)
@@ -56,7 +54,10 @@ type W = {
   fillCalls: any[]
   abort: (e: any) => any // turn.abort beneath the mod: undefined, or { deny } when no turn is running
   abortCalls: any[]
-  wbRefresh: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to POST /workbook/refresh
+  ctxReqs: any[] // the POSTs to dialogue/compact-context, never mixed with the event batches
+  compactContext: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to it (default 204)
+  appends: any[] // session.append calls beneath the mod
+  append?: (e: any) => any // overrides the answer to session.append (default: the row is written)
 }
 
 const teamAnswer = (role: string, members = 0, label = ''): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label }) })
@@ -71,9 +72,9 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     gets: [], invalidated: 0, team: () => teamAnswer('none'),
     wbReqs: [], wbNext: () => ({ status: 204 }), wbResult: () => ({ status: 200, text: '{"more":false}' }),
     model: () => ({ isAnswered: true, text: '{}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }), modelCalls: [],
-    fork: () => ({ isAnswered: true, text: '{"status":"s","todos":{"done":[],"dropped":[],"add":[]}}', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }), forkCalls: [], registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
+    registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
     submit: (e: any) => ({ text: e.text }), submitCalls: [], composer: '', readCalls: [], fillCalls: [], abort: () => undefined, abortCalls: [],
-    wbRefresh: () => ({ status: 202, text: '{"entry_id":7}' }),
+    ctxReqs: [], compactContext: () => ({ status: 204 }), appends: [],
     daemon: ackAll,
     bash: () => BASH_OK,
     compact: (e: any) => ({ messages: e.messages }),
@@ -89,6 +90,13 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
       if ('deny' in a) return { deny: a.deny }
       return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
     }
+    if (String(e.url).includes('/mod/v1/dialogue/')) { // the compact context (compact-inject-recap)
+      const cb = JSON.parse(e.init.body)
+      w.ctxReqs.push(cb)
+      const ca = await w.compactContext(cb, w.ctxReqs.length)
+      if ('deny' in ca) return { deny: ca.deny }
+      return { value: { status: ca.status, ok: ca.status >= 200 && ca.status < 300, headers: { 'content-type': 'application/json' }, text: ca.text ?? '' } }
+    }
     if (String(e.url).includes('/mod/v1/prompt/')) { // the prompt routes (U3-0b)
       const pb = JSON.parse(e.init.body)
       w.pqReqs.push({ url: e.url, body: pb })
@@ -101,11 +109,6 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
       const wbBody = JSON.parse(e.init.body)
       w.wbReqs.push({ url: e.url, body: wbBody })
       const isNext = String(e.url).endsWith('/next')
-      if (String(e.url).endsWith('/refresh')) {
-        const ra = await w.wbRefresh(wbBody, w.wbReqs.filter((r) => r.url.endsWith('/refresh')).length)
-        if ('deny' in ra) return { deny: ra.deny }
-        return { value: { status: ra.status, ok: ra.status >= 200 && ra.status < 300, headers: { 'content-type': 'application/json' }, text: ra.text ?? '' } }
-      }
       const a = await (isNext ? w.wbNext(wbBody, w.wbReqs.filter((r) => r.url.endsWith('/next')).length) : w.wbResult(wbBody, w.wbReqs.filter((r) => r.url.endsWith('/result')).length))
       if ('deny' in a) return { deny: a.deny }
       return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
@@ -159,10 +162,9 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     const r = await w.abort(e)
     return r && 'deny' in r ? { deny: r.deny } : { value: undefined }
   })
-  on('model.fork', async (_$: any, e: any) => {
-    w.forkCalls.push(e)
-    const r = await w.fork(e, w.forkCalls.length)
-    return r && 'deny' in r ? { deny: r.deny } : { value: r }
+  on('session.append', async (_$: any, e: any, next: any) => { // only the message is kept: the engine adds role, isMeta, uuid
+    w.appends.push({ message: { type: e.message.type, content: e.message.content } })
+    return w.append ? w.append(e) : next(e)
   })
   on('command.register', async (_$: any, e: any) => { w.registered.push(e.name); return { value: { command: e.name } } })
   on('ui.log', async (_$: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
@@ -221,7 +223,7 @@ test('posts session.start then turn events in seq order to the socket from pdx.j
     dropped_total: 0,
     cwd: '/work',
     interactive: true,
-    caps: ['workbook.v2', 'workbook.refresh', 'prompt.v1'],
+    caps: ['workbook.v2', 'prompt.v1'],
     events: [
       { seq: 1, at: expect.any(Number), sid: SID1, type: 'session.start', data: { cwd: '/work', surface: 'terminal' } },
       { seq: 2, at: expect.any(Number), sid: SID1, type: 'turn.start', data: { turn_id: 't1' } },
@@ -965,6 +967,191 @@ test('a compaction reports compact.start and compact.end, and the heartbeat says
   ])
 })
 
+// ---- the compact context: the recap goes into the conversation after a compaction ----
+
+const CMSGS = [{ role: 'user', text: 'hi', toolUses: [] }]
+const CTX_OK = (text = 'RECAP'): Answer => ({ status: 200, text: JSON.stringify({ text }) })
+const compactOf = ($: any, trigger = 'manual', more: any = {}) => $.session.compact({ trigger, messages: CMSGS, ...more } as any)
+const APPENDED = (text: string) => ({ message: { type: 'user', content: [{ type: 'text', text }] } })
+
+test('a compaction asks for the context and appends it a second after the hook returned', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(999)
+  expect(w.ctxReqs).toEqual([{ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1 }])
+  expect(w.appends).toEqual([])
+  await w.clock.advance(1)
+  expect(w.appends).toEqual([APPENDED('RECAP')])
+})
+
+test('the compaction does not wait for the daemon', async ($, on) => {
+  let open!: (a: Answer) => void
+  const door = new Promise<Answer>((r) => { open = r })
+  const w = evWorld(on, { compactContext: () => door })
+  await start($, w)
+  await compactOf($) // returns although the daemon has not answered
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+  open(CTX_OK('LATE'))
+  await w.clock.advance(1)
+  expect(w.appends).toEqual([APPENDED('LATE')])
+})
+
+test('an answer that comes before the compaction ends still waits the second', async ($, on) => {
+  let release!: () => void
+  const w = evWorld(on, { compactContext: () => CTX_OK(), compact: (e) => new Promise((r) => { release = () => r({ messages: e.messages }) }) })
+  await start($, w)
+  const c = compactOf($)
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+  release()
+  await c
+  await w.clock.advance(999)
+  expect(w.appends).toEqual([])
+  await w.clock.advance(1)
+  expect(w.appends.length).toBe(1)
+})
+
+test('the hook hands back what the compaction returned, unchanged', async ($, on) => {
+  const out = { messages: CMSGS, extra: { a: 1 } }
+  const w = evWorld(on, { compact: () => out, compactContext: () => CTX_OK() })
+  await start($, w)
+  expect(await compactOf($)).toEqual(out)
+})
+
+test('a subagent’s compaction and a precompute ask for nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($, 'auto', { agentId: 'ag-1' })
+  await compactOf($, 'precompute')
+  await w.clock.advance(5000)
+  expect(w.ctxReqs).toEqual([])
+  expect(w.appends).toEqual([])
+})
+
+test('a compaction skipped beneath appends nothing', async ($, on) => {
+  const w = evWorld(on, { compact: () => ({ skip: 'no' }), compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+})
+
+test('a member’s idle compaction stopped by the relay appends nothing', async ($, on) => {
+  const hello = JSON.stringify({ ok: true, role: 'member', self_relay: 'on', threshold: 70, min_growth: 20000, idle_intercept: 1 })
+  const w = evWorld(on, { compactContext: () => CTX_OK(), pdx: (argv) => (argv[0] === 'relay' && argv[1] === 'hello' ? { exitCode: 0, stdout: hello } : { exitCode: 0, stdout: '{}' }) })
+  await start($, w)
+  const r = await compactOf($, 'auto')
+  expect(r.skip).toBeDefined() // the relay stopped it: the engine never compacts
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+})
+
+for (const [name, answer] of [
+  ['204', { status: 204 }], ['an error status', { status: 500, text: '{}' }], ['broken JSON', { status: 200, text: '{' }],
+  ['an empty text', { status: 200, text: '{"text":""}' }], ['a refused fetch', { deny: 'no' }],
+] as [string, Answer][]) {
+  test(`${name} appends nothing and the compaction stands`, async ($, on) => {
+    const w = evWorld(on, { compactContext: () => answer })
+    await start($, w)
+    expect(await compactOf($)).toEqual({ messages: CMSGS })
+    await w.clock.advance(5000)
+    expect(w.appends).toEqual([])
+  })
+}
+
+test('a session that moved on before the second is up appends nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(5000)
+  expect(w.appends).toEqual([])
+})
+
+test('with the reporter off nothing is asked', async ($, on) => {
+  const w = evWorld(on, { pdxJSON: PDX_JSON_OLD, compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(5000)
+  expect(w.ctxReqs).toEqual([])
+  expect(w.appends).toEqual([])
+})
+
+test('the executor is told to look for the recap job', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await compactOf($)
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(1)
+})
+
+test('a busy executor does not hold the compaction or the append', async ($, on) => {
+  let finish!: () => void
+  const busy = new Promise<any>((r) => { finish = () => r({ isAnswered: true, text: '{}', usage: USAGE }) })
+  const w = evWorld(on, { compactContext: () => CTX_OK('OLD'), wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }), model: (_e, n) => (n === 1 ? busy : { isAnswered: true, text: '{}', usage: USAGE }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle() // the executor runs a model job that does not end
+  expect(w.modelCalls.length).toBe(1)
+  expect(await compactOf($)).toEqual({ messages: CMSGS }) // the compaction is not held
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('OLD')]) // nor the append
+  expect(nextReqs(w).length).toBe(1)
+  finish()
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(2) // the executor asks again: the recap job can be taken now
+})
+
+test('a refused append is logged and not tried again', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK(), append: () => ({ deny: 'nope' }) })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(5000)
+  expect(w.appends.length).toBe(1)
+  expect(w.logs.some((l) => l.includes('append refused') && l.includes('nope'))).toBe(true)
+})
+
+test('a session that moves on before the request goes out asks for nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($) // the 0 ms timer has not run yet
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(1000)
+  expect(w.ctxReqs).toEqual([])
+  expect(w.appends).toEqual([])
+})
+
+test('a late answer from an older compaction is dropped once a newer one has ended', async ($, on) => {
+  let open!: (a: Answer) => void
+  const first = new Promise<Answer>((r) => { open = r })
+  const w = evWorld(on, { compactContext: (_b, n) => (n === 1 ? first : CTX_OK('B')) })
+  await start($, w)
+  await compactOf($)
+  await compactOf($) // the first one's answer has not come yet
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('B')])
+  open(CTX_OK('A'))
+  await w.clock.advance(1)
+  expect(w.appends).toEqual([APPENDED('B')])
+})
+
+test('two compactions answered in order each append', async ($, on) => {
+  const w = evWorld(on, { compactContext: (_b, n) => CTX_OK(n === 1 ? 'A' : 'B') })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(1000)
+  await compactOf($)
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('A'), APPENDED('B')])
+})
+
 // ---- AskUserQuestion with the reporter on: ask.js's hook outside, the reporter's inside ----
 
 const Q = [{ question: '紅還是藍？', header: '顏色', options: [{ label: '紅', description: 'r' }, { label: '藍', description: 'b' }], multiSelect: false }]
@@ -1199,14 +1386,14 @@ const nextReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/next'))
 const resultReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/result'))
 const USAGE = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 7 }
 
-test('every batch announces workbook.v2, workbook.refresh, prompt.v1 and nothing else', async ($, on) => {
+test('every batch announces workbook.v2, prompt.v1 and nothing else', async ($, on) => {
   const w = evWorld(on)
   await start($, w)
   await turnStart($, 't1')
   await w.clock.advance(150)
   await w.clock.advance(10_150) // a heartbeat batch
   expect(w.posts.length).toBeGreaterThanOrEqual(2)
-  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2', 'workbook.refresh', 'prompt.v1'])
+  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2', 'prompt.v1'])
 })
 
 // Mutation gate: ask inside the hook, or for a subagent / interrupted turn → red.
@@ -1284,9 +1471,10 @@ test('a call the engine refuses (it rejects) is reported as refused', async ($, 
 })
 
 // Mutation gate: run an unknown kind, or leave it unanswered → red.
-for (const kind of ['mystery']) {
+for (const kind of ['mystery', 'refresh']) {
   test(`a ${kind} job is answered refused without a model call`, async ($, on) => {
     const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer({ id: 'wbj-r', kind, fork: { prompt: 'x' } }) : { status: 204 }) })
+    // a refresh job still carries its old fork: nothing runs it, $.model.fork is not even a hook of the world
     await start($, w)
     await turnStart($, 't1')
     await turnDone($, 't1')
@@ -1456,159 +1644,11 @@ for (const [name, complete] of badJobs) {
   })
 }
 
-// ---- WB-2b-ii: the refresh job ($.model.fork) and /workbook refresh (spec §5.6) ----
 
-const REFRESH_JOB = (extra: any = {}) => ({ id: 'wbj-r1', kind: 'refresh', fork: { prompt: '[工作簿重整] …', timeout_ms: 90000 }, ...extra })
-const FORK_OK = { isAnswered: true, text: '{"status":"s","todos":{"done":[1],"dropped":[],"add":[]}}', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }
-const wbCmd = ($: any, args: string) => $.command.run({ command: 'workbook', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
-const refreshReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/refresh'))
-
-// Mutation gate: complete instead of fork, or send more than the prompt, or drop the usage → red.
-test('a refresh job runs one $.model.fork with the prompt alone, and reports the usage and latency', async ($, on) => {
-  const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB()) : { status: 204 }), fork: () => FORK_OK })
-  await start($, w)
-  await turnStart($, 't1')
-  await turnDone($, 't1')
-  await w.clock.settle()
-  expect(w.modelCalls.length).toBe(0)
-  expect(w.forkCalls.length).toBe(1)
-  expect(w.forkCalls[0]).toEqual({ prompt: '[工作簿重整] …' })
-  expect(resultReqs(w)[0].body).toMatchObject({
-    job_id: 'wbj-r1', answered: true, text: FORK_OK.text, usage: { input: 10, output: 5, cache_read: 900 },
-  })
-})
-
-// Mutation gate: map nothing-to-fork to api-error → red.
-test('a fork with nothing to fork is reported as nothing-to-fork', async ($, on) => {
-  const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB()) : { status: 204 }), fork: () => ({ isAnswered: false, reason: 'nothing-to-fork', usage: {} }) })
-  await start($, w)
-  await turnStart($, 't1')
-  await turnDone($, 't1')
-  await w.clock.settle()
-  expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-r1', answered: false, reason: 'nothing-to-fork' })
-})
-
-// Mutation gate: pass a malformed fork to the model → red.
-for (const [name, fork] of [
-  ['no fork', undefined],
-  ['an empty prompt', { prompt: '' }],
-  ['a prompt that is not text', { prompt: 5 }],
-  ['an oversized prompt', { prompt: 'x'.repeat(200_001) }],
-  ['a zero timeout', { prompt: 'p', timeout_ms: 0 }],
-  ['an hour-long timeout', { prompt: 'p', timeout_ms: 3_600_000 }],
-] as [string, any][]) {
-  test(`a refresh job with ${name} is refused without a model call`, async ($, on) => {
-    const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer({ id: 'wbj-r2', kind: 'refresh', fork }) : { status: 204 }) })
-    await start($, w)
-    await turnStart($, 't1')
-    await turnDone($, 't1')
-    await w.clock.settle()
-    expect(w.forkCalls.length).toBe(0)
-    expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-r2', answered: false, reason: 'refused' })
-  })
-}
-
-// Mutation gate: no deadline on the fork → the executor holds for good → red.
-test('a fork that never settles is cut at timeout_ms + 5 s and reported aborted', async ($, on) => {
-  const w = evWorld(on, {
-    wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB({ fork: { prompt: 'p', timeout_ms: 90000 } })) : { status: 204 }),
-    fork: () => new Promise(() => {}),
-  })
-  await start($, w)
-  await turnStart($, 't1')
-  await turnDone($, 't1')
-  await w.clock.settle()
-  expect(w.forkCalls.length).toBe(1)
-  await w.clock.advance(94_000)
-  expect(resultReqs(w).length).toBe(0)
-  await w.clock.advance(1100)
-  expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-r1', answered: false, reason: 'aborted' })
-})
-
-// Mutation gate: ask next inside the hook, or not at all after a 202 → red.
-test('/workbook refresh asks the daemon, answers one line, then asks next at once from a timer', async ($, on) => {
-  const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB()) : { status: 204 }), fork: () => FORK_OK })
-  await start($, w)
-  const r = await wbCmd($, 'refresh')
-  expect(r.text).toContain('已排入')
-  expect(refreshReqs(w)).toHaveLength(1)
-  expect(refreshReqs(w)[0].body).toEqual({ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1 })
-  expect(nextReqs(w)).toHaveLength(0) // not inside the hook
-  await w.clock.settle()
-  expect(nextReqs(w)).toHaveLength(1)
-  expect(nextReqs(w)[0].body.wait_ms).toBe(0)
-  expect(w.forkCalls.length).toBe(1)
-})
-
-test('/workbook refresh: not_live, refresh_pending, an unreachable daemon and wrong arguments each say so and ask nothing', async ($, on) => {
+test('the /workbook command is no longer registered', async ($, on) => {
   const w = evWorld(on)
   await start($, w)
-  w.wbRefresh = () => ({ status: 409, text: '{"error":"not_live"}' })
-  expect((await wbCmd($, 'refresh')).text).toContain('沒有可執行重整')
-  w.wbRefresh = () => ({ status: 409, text: '{"error":"refresh_pending"}' })
-  expect((await wbCmd($, 'refresh')).text).toContain('還在進行')
-  w.wbRefresh = () => ({ status: 500, text: '{"error":"internal"}' })
-  expect((await wbCmd($, 'refresh')).text).toContain('失敗')
-  w.wbRefresh = () => ({ deny: 'socket gone' })
-  expect((await wbCmd($, 'refresh')).text).toContain('沒有連上')
-  for (const args of ['', 'rebuild', 'refresh now']) expect((await wbCmd($, args)).text).toContain('用法')
-  await w.clock.settle()
-  expect(nextReqs(w)).toHaveLength(0)
-  expect(refreshReqs(w)).toHaveLength(4)
-})
-
-test('the /workbook command is registered once the reporter is on', async ($, on) => {
-  const w = evWorld(on)
-  await start($, w)
-  expect(w.registered).toContain('workbook')
-})
-
-// A fork cannot be cut ($.model.fork takes no signal): after its deadline it keeps spending the whole conversation's tokens,
-// so no other model call starts until it settles; then the executor asks again. Its late answer is not reported.
-// Mutation gate: let the loop go on while the fork runs → red (codex attack).
-test('a fork that outlived its deadline holds the executor until it settles; its late answer is dropped', async ($, on) => {
-  let release: (v: any) => void = () => {}
-  const w = evWorld(on, {
-    wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB({ fork: { prompt: 'p', timeout_ms: 90000 } })) : n === 2 ? jobAnswer(JOB({ id: 'wbj-t2' })) : { status: 204 }),
-    wbResult: () => ({ status: 200, text: '{"more":true}' }), // the daemon says another job is ready
-    fork: () => new Promise((resolve) => { release = resolve }),
-  })
-  await start($, w)
-  await turnStart($, 't1')
-  await turnDone($, 't1')
-  await w.clock.settle()
-  await w.clock.advance(95_100) // the deadline: reported aborted
-  expect(resultReqs(w).map((r) => r.body.job_id)).toEqual(['wbj-r1'])
-  await w.clock.settle()
-  expect(nextReqs(w)).toHaveLength(1) // not asked again while the fork runs
-  expect(w.modelCalls.length).toBe(0)
-  release(FORK_OK) // it finally settles
-  await w.clock.settle()
-  expect(resultReqs(w).filter((r) => r.body.job_id === 'wbj-r1')).toHaveLength(1) // the late answer is not reported
-  expect(nextReqs(w).length).toBeGreaterThanOrEqual(2) // asked again now
-  expect(w.modelCalls.length).toBe(1)
-  expect(resultReqs(w).map((r) => r.body.job_id)).toContain('wbj-t2')
-})
-
-// While a fork runs past its deadline /workbook refresh queues nothing and says why; a fork that never settles is given up
-// after 10 minutes and the executor works again. Mutation gate: no cap → red; queue anyway → red (codex critic).
-test('an orphaned fork: /workbook refresh is refused with a reason; after 10 minutes the hold is given up', async ($, on) => {
-  const w = evWorld(on, {
-    wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB({ fork: { prompt: 'p', timeout_ms: 90000 } })) : n === 2 ? jobAnswer(JOB({ id: 'wbj-t2' })) : { status: 204 }),
-    wbResult: () => ({ status: 200, text: '{"more":true}' }),
-    fork: () => new Promise(() => {}), // never settles
-  })
-  await start($, w)
-  await turnStart($, 't1')
-  await turnDone($, 't1')
-  await w.clock.settle()
-  await w.clock.advance(95_100)
-  expect((await wbCmd($, 'refresh')).text).toContain('還在背景執行')
-  expect(refreshReqs(w)).toHaveLength(0)
-  await w.clock.advance(600_000)
-  await w.clock.settle()
-  expect(w.modelCalls.length).toBe(1) // the executor works again: the second job ran
-  expect((await wbCmd($, 'refresh')).text).toContain('已排入')
+  expect(w.registered).not.toContain('workbook')
 })
 
 // ---- U3-0b: the Apps' send and interrupt (interface U3 plan D7) ----
