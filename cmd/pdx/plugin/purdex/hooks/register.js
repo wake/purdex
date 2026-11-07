@@ -51,7 +51,7 @@
 // prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
-import { backgroundBusy, compactNowAtTurnEnd, compactionPolicy, registerEvents, setRelayStateProbe } from './events.js'
+import { backgroundBusy, compactionPolicy, registerEvents, setRelayStateProbe } from './events.js'
 import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, parseTeamNames, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
@@ -2061,7 +2061,6 @@ export function register(on) {
         if (!s.helloOK) s.idleWanted = true // hello has not answered yet: its answer arms the timer
       }
       await maybeAutoCompact($, e)
-      compactNowAtTurnEnd($) // pdx compact --now waiting for this turn end: after the relay decision above
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
     }

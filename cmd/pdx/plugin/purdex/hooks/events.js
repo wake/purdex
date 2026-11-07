@@ -593,9 +593,7 @@ function pqCompact($) {
 }
 
 // The flag is consumed when the tick is scheduled: an aborted and a completed turn end for one turn must not compact twice.
-// Called by register.js once its turn-end relay decision has settled (a relay that begins takes the state first, and compact-now yields);
-// turnAborted calls it itself (an interrupt has no relay step).
-export function compactNowAtTurnEnd($) {
+function compactNowAtTurnEnd($) {
   if (!compactNowWanted) return
   compactNowWanted = false
   const gen = wb.gen
@@ -834,6 +832,7 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
+    compactNowAtTurnEnd($) // events.js wraps register.js's hook: its relay decision for this turn end has settled
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
