@@ -70,7 +70,7 @@ func (c *ccRig) insertRecap(from, to int) {
 }
 
 func (c *ccRig) run(wait time.Duration) (string, bool) {
-	return c.m.compactContext(context.Background(), sidS, wait)
+	return c.m.compactContext(context.Background(), sidS, "", wait)
 }
 
 func mustHave(t *testing.T, text string, want ...string) {
@@ -312,7 +312,7 @@ func TestCompactContext_ModuleNotRunning(t *testing.T) {
 		"no store":    {rc: c.rc, turns: c.tr},
 		"no reader":   {store: c.st, rc: c.rc},
 	} {
-		if text, ok := m.compactContext(context.Background(), sidS, time.Second); ok || text != "" {
+		if text, ok := m.compactContext(context.Background(), sidS, "", time.Second); ok || text != "" {
 			t.Fatalf("%s: got %q %v", name, text, ok)
 		}
 	}
@@ -339,5 +339,20 @@ func TestCapTail(t *testing.T) {
 	got = capTail(long, 8000)
 	if !utf8.ValidString(got) || !strings.HasSuffix(got, "中尾") || utf8.RuneCountInString(got) > 8000+utf8.RuneCountInString(mark)+1 {
 		t.Fatalf("hard cut: valid=%v runes=%d", utf8.ValidString(got), utf8.RuneCountInString(got))
+	}
+}
+
+func TestCompactContext_LogsTheTrigger(t *testing.T) {
+	for trigger, want := range map[string]string{"plugin": "trigger=plugin ", "": "trigger=- "} {
+		c := newCCRig(t, 2)
+		c.seed(2)
+		var logs []string
+		c.rc.logf = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+		if _, ok := c.m.compactContext(context.Background(), sidS, trigger, time.Second); !ok {
+			t.Fatal("no text")
+		}
+		if !strings.Contains(strings.Join(logs, "\n"), want) {
+			t.Fatalf("want %q in %q", want, logs)
+		}
 	}
 }

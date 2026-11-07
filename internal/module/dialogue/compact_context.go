@@ -1,6 +1,7 @@
 package dialogue
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -27,7 +28,7 @@ const (
 // compactContext answers a compaction: the session's newest recap (a fresh one when it can be had within wait), what was
 // said after it, and where the dialogue files are. false: there is nothing to say, or the module is not running. A ctx that
 // ended still returns what is in hand.
-func (m *Module) compactContext(ctx context.Context, sid string, wait time.Duration) (string, bool) {
+func (m *Module) compactContext(ctx context.Context, sid, trigger string, wait time.Duration) (string, bool) {
 	m.mu.Lock()
 	st, rc, turns := m.store, m.rc, m.turns
 	m.mu.Unlock()
@@ -67,7 +68,7 @@ func (m *Module) compactContext(ctx context.Context, sid string, wait time.Durat
 	}
 	parts = append(parts, "<dialogue: "+filepath.Join(rc.w.root, sid)+"/>\n"+compactDialogueHow)
 	text := strings.Join(parts, "\n\n") + "\n" + compactLastLine
-	rc.log("[dialogue] compact context session=%s recap=%s waited=%dms tail=%d text=%d", sid, recapState, waited.Milliseconds(),
+	rc.log("[dialogue] compact context session=%s trigger=%s recap=%s waited=%dms tail=%d text=%d", sid, cmp.Or(trigger, "-"), recapState, waited.Milliseconds(),
 		len([]rune(tail)), len([]rune(text)))
 	return text, true
 }

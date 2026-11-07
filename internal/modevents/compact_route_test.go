@@ -21,10 +21,12 @@ type compactWB struct {
 	nextSeen atomic.Int32 // fakeWB.running at the moment CompactContext ran
 	ended    chan struct{}
 	hold     chan struct{} // when set, the call waits until it is closed
+	trigger  atomic.Value  // the last trigger the route handed over
 }
 
-func (c *compactWB) CompactContext(ctx context.Context, sid string) (string, bool) {
+func (c *compactWB) CompactContext(ctx context.Context, sid, trigger string) (string, bool) {
 	c.calls.Add(1)
+	c.trigger.Store(trigger)
 	c.nextSeen.Store(c.fakeWB.running.Load())
 	select {
 	case <-c.hold:
@@ -218,5 +220,21 @@ func TestCompactContext_StopEndsTheWait(t *testing.T) {
 	}
 	if code := <-codes; code != http.StatusNoContent {
 		t.Fatalf("code %d", code)
+	}
+}
+
+func TestCompactContext_TriggerPassedThrough(t *testing.T) {
+	c := &compactWB{fakeWB: &fakeWB{}, text: "x"}
+	h := compactHandler(c)
+	body := fmt.Sprintf(`{"stream":%q,"session_id":%q,"trigger":"plugin"}`, testStream, testSID)
+	if rec := post(t, h, http.MethodPost, CompactContextPath, body); rec.Code != 200 {
+		t.Fatal(rec.Code)
+	}
+	if got := c.trigger.Load(); got != "plugin" {
+		t.Fatalf("trigger %v", got)
+	}
+	post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID))
+	if got := c.trigger.Load(); got != "" {
+		t.Fatalf("old mod: trigger %q", got)
 	}
 }

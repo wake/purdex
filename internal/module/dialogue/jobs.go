@@ -53,8 +53,8 @@ func (s jobsService) JobResult(stream string, r modevents.WorkbookResult) (bool,
 }
 
 // CompactContext is the text a compaction hands the agent (compact_context.go); false: nothing to hand over.
-func (s jobsService) CompactContext(ctx context.Context, sid string) (string, bool) {
-	return s.m.compactContext(ctx, sid, compactRecapWait)
+func (s jobsService) CompactContext(ctx context.Context, sid, trigger string) (string, bool) {
+	return s.m.compactContext(ctx, sid, trigger, compactRecapWait)
 }
 
 func (s jobsService) JobWaiting(sessionID string) bool {

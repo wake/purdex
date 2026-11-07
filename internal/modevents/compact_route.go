@@ -18,16 +18,17 @@ const maxCompactContexts = 16
 
 // CompactContextService is what a WorkbookService may also implement; one that does not makes the route a 503.
 type CompactContextService interface {
-	CompactContext(ctx context.Context, sessionID string) (string, bool)
+	CompactContext(ctx context.Context, sessionID, trigger string) (string, bool)
 }
 
-// compactContext serves POST /mod/v1/dialogue/compact-context {stream, session_id}: 200 {"text"}, 204 (nothing to hand
+// compactContext serves POST /mod/v1/dialogue/compact-context {stream, session_id, trigger?}: 200 {"text"}, 204 (nothing to hand
 // over, not the session's own stream, or the wait ended), 400, 429, 503. It does not take h.polls: the same stream's
 // `next` long poll must run meanwhile, or the job it would deliver never starts.
 func (h *handler) compactContext(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Stream    string `json:"stream"`
 		SessionID string `json:"session_id"`
+		Trigger   string `json:"trigger"` // manual | auto | plugin; an old mod sends none
 	}
 	if !h.readJSON(w, r, &in) {
 		return
@@ -57,7 +58,7 @@ func (h *handler) compactContext(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(compactContextDeadline))
 	ctx, cancel := h.pollContext(r)
 	defer cancel()
-	text, ok := svc.CompactContext(ctx, in.SessionID)
+	text, ok := svc.CompactContext(ctx, in.SessionID, in.Trigger)
 	if !ok || text == "" || ctx.Err() != nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
