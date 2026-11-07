@@ -10,11 +10,20 @@
 
 **Spec**：`docs/specs/2026-11-07-compact-control-spec.md`（以下稱 spec）§5–§12、§13 Phase 2–5。Phase 1 另見 `docs/plans/2026-11-07-compact-control-phase1-plan.md`，本 plan 假設它已合併。
 
-**流程**：完整開發流程。本 plan 帶 spec 給 codex 審一輪 → subagent TDD → 每張 PR 跑 codex R1 ＋ R2 → merge。七張 PR 依序：2a → 2b → 3 → 4a → 4b → 5a → 5b（4a、4b 只依賴 2a，可以和 3 並行開發，但一次只開一位 implementer）。全部合併後一起 bump、一起部署。每個 task 一個 commit。
+**流程**：完整開發流程。本 plan 帶 spec 給 codex 審一輪 → subagent TDD → 每張 PR 跑 codex R1 ＋ R2 → merge。七張 PR 依序：2a → 2b → 3 → 4a → 4b → 5a → 5b（4a 只依賴 2a，可以和 3 並行開發；4b 依賴 4a 的 `ThresholdStepper`；一次只開一位 implementer）。全部合併後一起 bump、一起部署。每個 task 一個 commit。
+
+**修訂 1**（codex plan review `task-mw6bg5i1-s9gr6x`，7 條查證後全數採納，都是局部補充，不再送審）：
+- 第 1 條（critical）：`promptq.Queue.Result` 在 `Accepted` 時丟掉 mod 回報的原因（`internal/promptq/queue.go:649`），`--now` 分不出馬上壓還是回合結束再壓。Task 14 加上：`KindCompact` 的 `Accepted` 保留 `Reason`。
+- 第 2 條：spec §7 明訂 `GET /api/hostconfig/compaction`，原 plan 拿掉了。Task 1 加回單列 GET，「我定的事」第 1 條改寫。
+- 第 3 條：4b 依賴 4a 的 `ThresholdStepper`，上面的順序已改。
+- 第 4 條：member 的接力已經 clear 到新 session、seed 回合還沒結束時，未結束的 op 只有 `OpenRelayOpByNewSession` 找得到。Task 14 的 `relay_open` 兩種都查，照 `internal/module/team/relay_member.go:110`。
+- 第 5 條：Task 6 自己的驗證要包含 mod 的載入規則（`mod-changed`、`claude plugin validate`）。
+- 第 6 條：spec §8 是「自己改完再讀一次」。Task 10 改成 PUT 成功後再 GET 一次，加測試。
+- 第 7 條：`GET /api/team` 會列出已結束與已釋出的 member。Task 12 只替 active member 填 `Compaction`，加測試。
 
 ## 我定的事（spec 沒寫明）
 
-1. **主機預設的讀取**：`compaction` 列跟其他列一樣出現在 `GET /api/hostconfig` 的回應裡，不另開單列 GET；寫入是 `PUT /api/hostconfig/compaction`。spec §7 寫「照其他 host config 列」，現有的列都是這樣。
+1. **主機預設的讀取**：照 spec §7 有 `GET /api/hostconfig/compaction`（單列，形狀同 `GET /api/hostconfig` 裡那一列的 `{items, revision, invalid}`，寫法照 `handleGetPersonas`），`compaction` 列也照樣出現在 `GET /api/hostconfig` 的回應裡，App 走後者；寫入是 `PUT /api/hostconfig/compaction`。
 2. **lead 走另一條路由**：`POST /api/team/member-compaction`，帶 `origin_inbox`，用既有的 `callerTeam`／`matchMember` 確認是自己的 member。App 的 `/api/team/compaction/{session_id}` 沒有身分檢查，「agent 不能改自己的設定」照無人值守的做法守：路由字串不出現在 `cmd/pdx` 與 skill 裡，用 guard 測試釘住。
 3. **lead 改的是部分欄位**：`pdx compact --threshold 50` 只改門檻，其他覆寫不動；App 的 PUT 照 spec 整份取代。
 4. **接力沿用**：自我接力與 member 接力都複製覆寫（spec §5.3 沒分種類）。
@@ -61,7 +70,7 @@ spec 沒寫明、但最可能出事的情況：
 
 **Files:**
 - Create: `internal/module/hostconfig/compaction.go`、`internal/module/hostconfig/compaction_test.go`
-- Modify: `internal/module/hostconfig/handler.go`（`emptyFor`、`handleGet` 的列表）、`read.go`（`readers`）、`module.go`（`Init` 的 `Registry.Register`、`RegisterRoutes`）
+- Modify: `internal/module/hostconfig/handler.go`（`emptyFor`、`handleGet` 的列表、單列 GET 的 handler）、`read.go`（`readers`）、`module.go`（`Init` 的 `Registry.Register`、`RegisterRoutes` 的 GET 與 PUT）
 
 **Interfaces:**
 - Produces:
@@ -74,7 +83,7 @@ spec 沒寫明、但最可能出事的情況：
 照 `relay_quota.go` 的寫法：嚴格的 `normalizeCompaction`（兩組與三個欄位都必填、門檻 1–100 的整數、未知欄位與重複 key 都 400）、寬鬆的 `readCompaction`。
 
 - [ ] **Step 1：寫會紅的測試**（照 `relay_quota_test.go`）
-  - `TestCompaction_DefaultWhenNeverWritten`：`GET /api/hostconfig` 的 `compaction.items` 等於預設、revision 0；`Compaction()` 回 `DefaultCompaction`。
+  - `TestCompaction_DefaultWhenNeverWritten`：`GET /api/hostconfig` 的 `compaction.items` 等於預設、revision 0；`GET /api/hostconfig/compaction` 回同樣的 `{items, revision}`；`Compaction()` 回 `DefaultCompaction`。
   - `TestCompaction_PutRoundTrip`：PUT 後 GET 與 `Compaction()` 都是寫入的值。
   - `TestCompaction_PutRejects`：表格測試，缺 `solo`、缺 `threshold`、門檻 0／101／70.5／`"70"`、外層或內層多一個欄位、重複 key → 400，原值不變。
   - `TestCompaction_StaleRevisionConflicts`：舊 revision → 409。
@@ -203,7 +212,8 @@ spec 沒寫明、但最可能出事的情況：
   - `events.js`：`team.compaction`（成功讀到時設成 `parseCompaction(body.compaction)`；讀失敗不動；`forgetTeam` 清成 `null`）；`export function compactionPolicy()` 回 `team.compaction`；`compactFetch` 帶 `e.trigger`。
 
 - [ ] **Step 1：寫會紅的測試**：`parseCompaction` 的表格（合法、缺欄位、門檻 0／101／70.5、型別錯）；compact-context 的請求 body 有 `trigger: 'manual'`。policy 的行為在 Task 7、8 驗。
-- [ ] **Step 2：`pdx test mod-hooks`，確認紅。** **Step 3：實作。** **Step 4：同一指令，確認綠。**
+- [ ] **Step 2：`pdx test mod-hooks`，確認紅。** **Step 3：實作。** `compactionPolicy()` 不收 `$`、只讀模組變數（M-U1-2）。
+- [ ] **Step 4：`pdx test mod-hooks`＋`pdx test mod-changed`（含 `embed_test.go` 的註冊規則）＋`claude plugin validate cmd/pdx/plugin/purdex`，確認綠、載入沒有錯誤。**
 - [ ] **Step 5：commit** `feat(mod): read the compaction settings`
 
 ### Task 7：回合結束時自動壓縮
@@ -297,9 +307,9 @@ spec 沒寫明、但最可能出事的情況：
 - 門檻或閒置 → 原覆寫只改那一格
 - 跟主機預設 → 三個都 null
 
-PUT 的回應就是新的值（spec 的「改完再讀一次」）；失敗時顯示錯誤、值不變。
+PUT 成功後再 GET 一次，顯示 GET 的結果（spec §8「自己改完再讀一次」：lead 剛好在之後改了，看到的是最新的）；GET 失敗就先顯示 PUT 的回應。PUT 失敗時顯示錯誤、值不變。
 
-- [ ] **Step 1：寫會紅的測試**：API 的路徑與 body；兩種模式的亮法與「自訂」；四種寫入的 body；不介入的兩句；有覆寫才有「跟主機預設」；讀取途中 `sessionId` 換掉，舊回應不顯示；PUT 失敗顯示錯誤。
+- [ ] **Step 1：寫會紅的測試**：API 的路徑與 body；兩種模式的亮法與「自訂」；四種寫入的 body；PUT 成功後有一次 GET，畫面顯示 GET 的值（測試讓 GET 回一個跟 PUT 回應不同的值）；不介入的兩句；有覆寫才有「跟主機預設」；讀取途中 `sessionId` 換掉，舊回應不顯示；PUT 失敗顯示錯誤。
 - [ ] **Step 2：`pdx test spa-file -- src/components/team/CompactionLine.test.tsx`（以及 api 測試），確認紅。** **Step 3：實作。** **Step 4：同一指令，確認綠。**
 - [ ] **Step 5：commit** `feat(spa): a session's compaction line`
 
@@ -331,10 +341,10 @@ PUT 的回應就是新的值（spec 的「改完再讀一次」）；失敗時�
 - Produces：
   - `type MemberCompactionRequest struct { OriginInbox string \`json:"origin_inbox"\`; Target string \`json:"target"\`; Set *CompactionOverride \`json:"set,omitempty"\`; Reset bool \`json:"reset,omitempty"\` }`（Task 14 再加 `Now`）
   - `type MemberCompactionView struct { Address string \`json:"address"\`; Ref string \`json:"ref"\`; CompactionView }`
-  - `team.Member.Compaction *CompactionEffective \`json:"compaction,omitempty"\``：本機 member 用 `compactionView` 填，出錯或遠端為 nil。
+  - `team.Member.Compaction *CompactionEffective \`json:"compaction,omitempty"\``：只替本機、`State == MemberActive` 的 member 用 `compactionView` 填；出錯、遠端、已結束或已釋出都是 nil（`GET /api/team` 會列出任何狀態的 member，已結束的 session 角色會變成 none，算出來的值沒有意義）。
   - `POST /api/team/member-compaction`：`callerTeam`（不是 lead → `not_lead`）→ `matchMember`（找不到 → 409 `not_your_member`）→ `isRemoteRow` → 409 `remote_unsupported`。`Reset` 刪覆寫；`Set` 把非 nil 的欄位合併進現有覆寫（驗證同 Task 3）；兩者都沒有就只讀。`Reset` 與 `Set` 同時給 → 400。
 
-- [ ] **Step 1：寫會紅的測試**：不是 lead、不是自己的 member、遠端 member 三種拒絕；只讀；合併（先有 `idle:false`，再設門檻 50，兩個都在）；reset；門檻 0 → 400；`Reset`＋`Set` → 400；`GET /api/team` 的 member 帶 `compaction`。
+- [ ] **Step 1：寫會紅的測試**：不是 lead、不是自己的 member、遠端 member 三種拒絕；只讀；合併（先有 `idle:false`，再設門檻 50，兩個都在）；reset；門檻 0 → 400；`Reset`＋`Set` → 400；`GET /api/team` 的 active member 帶 `compaction`，已結束與已釋出的沒有。
 - [ ] **Step 2：`pdx test go-pkg -- ./internal/module/team/`，確認紅。** **Step 3：實作。** **Step 4：同一指令，確認綠。**
 - [ ] **Step 5：commit** `feat(team): a lead reads and changes a member's compaction settings`
 
@@ -382,12 +392,12 @@ guard：`cmd/pdx/` 下非測試的 `.go` 與 `cmd/pdx/plugin/purdex/skills/**` �
 
 **Interfaces:**
 - Produces：
-  - `(q *Queue) SubmitCompact(ctx context.Context, sessionID string) (Outcome, error)`：走 prompt owner。
+  - `(q *Queue) SubmitCompact(ctx context.Context, sessionID string) (Outcome, error)`：走 prompt owner。`Queue.Result` 的 `Accepted` 分支（約 649 行）對 `KindCompact` 保留 mod 回報的 `Reason`（其他種類不變）。
   - mod：`pqCompact($)`：`ev.turnId` 有值 → `compactNowWanted = true`，回 `accepted`、reason `turn_end`；否則 `$.clock.after(0, () => compactNowTick($))`，回 `accepted`、reason `now`。`onTurnComplete`（主對話，任何 reason）在 `compactNowWanted` 時排一次 tick。`compactNow($)` 呼叫 `$.session.compact()`；被拒且是回合正在跑 → `compactNowWanted = true`，等下一個回合結束；其他錯誤只 log。
-  - daemon：`Now` 時先做 Task 12 的檢查；member 有未結束的接力 → 409 `relay_open`；`SubmitCompact` 的結果 `accepted` → 回應 `now: "now" | "turn_end"`；`dropped unsupported_kind` → 409 `compact_unsupported`；其他 dropped／unknown → 409 `compact_failed`（加進 `teamRefusalCodes`）。
+  - daemon：`Now` 時先做 Task 12 的檢查；member 有未結束的接力 → 409 `relay_open`，`OpenRelayOpBySession(mr.SessionID)` 與 `OpenRelayOpByNewSession(mr.SessionID)` 兩種都查（後者是接力已 clear 到這個 session、seed 回合還在跑，照 `relay_member.go:110`）；`SubmitCompact` 的結果 `accepted` → 回應 `now: "now" | "turn_end"`；`dropped unsupported_kind` → 409 `compact_unsupported`；其他 dropped／unknown → 409 `compact_failed`（加進 `teamRefusalCodes`）。
   - CLI：`--now` 不能跟改值的旗標一起用；印 `已叫 member 壓縮` 或 `member 正在跑回合，這個回合結束時壓縮`。
 
-- [ ] **Step 1：寫會紅的測試**：`KindCompact` 交給 prompt owner；daemon 的 `relay_open`、`compact_unsupported`、成功兩種；mod 閒置時從 timer 壓縮一次、回 `now`；回合中回 `turn_end`，回合結束（含 aborted）才壓縮；回合正在跑被拒時下一個回合結束再試；`/clear` 之後不再壓；`parsePromptJob` 認得 `compact`；CLI 的兩種輸出、拒絕 exit 13、與改值旗標一起用 exit 2。
+- [ ] **Step 1：寫會紅的測試**：`KindCompact` 交給 prompt owner、`Accepted` 的 `Reason` 保留下來（`KindSubmit` 照舊不保留）；daemon 的 `relay_open` 兩種（自己的 session 有 op、接力 clear 進這個 session 的 op 還沒結束）、`compact_unsupported`、成功兩種；mod 閒置時從 timer 壓縮一次、回 `now`；回合中回 `turn_end`，回合結束（含 aborted）才壓縮；回合正在跑被拒時下一個回合結束再試；`/clear` 之後不再壓；`parsePromptJob` 認得 `compact`；CLI 的兩種輸出、拒絕 exit 13、與改值旗標一起用 exit 2。
 - [ ] **Step 2：`pdx test go-pkg -- ./internal/promptq/ ./internal/module/team/ ./cmd/pdx/`＋`pdx test mod-hooks`，確認紅。** **Step 3：實作。** **Step 4：同樣的指令＋`pdx test mod-changed`，確認綠。**
 - [ ] **Step 5：commit** `feat: pdx compact --now`
 
