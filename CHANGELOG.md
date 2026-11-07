@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.783] - 2026-11-08
+
+> **壓縮改由 Purdex 決定：在回合結束時壓，每個 session 可以分「討論」與「開發」。** daemon、mod、**SPA** 都有改：**部署 daemon 後要跑 `pdx setup`（兩台），這版要重新打包 Mac App，使用者要更新**。wwd 沒改（只改了 `.wwd/tasks.toml`），不重裝。依賴沒變，不用 `pnpm install`。新 mod 配舊 daemon 讀不到設定就不介入；新 daemon 配舊 mod，多的欄位沒人讀。**兩台 `~/.claude/settings.json` 的 `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 要在部署時拿掉**（先問使用者、先備份），否則 Claude Code 仍會在 70% 自己壓縮，回合中也照壓；拿掉後已在跑的 session 要重開才生效。
+
+### Added
+
+- **主機預設（#3993、#3996）**：host config 新增 `compaction` 列，分「獨立 session」（`solo`）與「team」（lead 與 member）兩組，各有自動壓縮、門檻（1–100）、閒置壓縮三個值。沒寫過的主機兩組都是自動、70%、閒置開，跟之前一樣。App 的主機頁新增「壓縮」區。
+- **逐 session 覆寫（#3993、#3998）**：team.db 新表 `session_compaction`，每個值可單獨覆寫，沒寫的跟主機預設；接力後的新 session 沿用，手動 `/clear` 不沿用。個人面板與 team 面板的設定區多一行「壓縮」：「討論」（自動關、閒置關）、「開發」（自動開、70%、閒置開）、門檻、閒置壓縮、「跟主機預設」。值對不上兩種模式時標「自訂」。
+- **不介入的情況（#3993）**：session 的自我接力開著，或 member 且主機的 `member_auto` 開著，壓縮控制整個不介入，跟之前一樣交給接力與 Claude Code 原生壓縮。兩台的自動接力 11-07 起都關，所以上線後所有 session（含 member）都由壓縮控制管理。
+- **mod 在回合結束時壓縮（#3994、#3995）**：主對話的回合正常結束（`answer`）、用量達門檻、接力閒置時，mod 從 timer 呼叫 `$.session.compact()`，回答先顯示完。防重壓：每次壓縮後第一個讀到的 tokens 是「底」，要再多 20,000 才會再壓。閒置壓縮關時，閒置壓縮與 `precompute` 都回 `{ skip }`；回合中的原生自動壓縮（安全網）永遠不擋。
+- **lead 看與改 member 的設定（#3999）**：`pdx compact <ref>` 印出生效值與覆寫；`--auto on|off`、`--threshold N`、`--idle on|off` 合併進覆寫，`--reset` 清掉。只能對自己 team、還在 team 裡、這台主機的 member（`not_your_member`／`remote_unsupported`，exit 13）；member 正在接力時拒絕修改（`relay_open`）。`pdx team` 在 EFFORT 後加 COMPACT 欄：`自動 70%`／`手動`／`接力`（不介入）／`-`（讀不到或遠端）。
+- **`pdx compact <ref> --now`（#4001、#4003）**：叫 member 壓縮，走 App 送提示用的同一條佇列（新工作種類 `compact`）。閒置就馬上壓（印 `已叫 member 壓縮`），正在跑回合就等這個回合結束（印 `member 正在跑回合，這個回合結束時壓縮`）。接力進行中不壓；自動壓縮正在跑就等它，任何一次主對話的壓縮真的跑完就算滿足，自動壓縮沒成功時在下一個回合結束補壓；session 換了就取消。被其他 hook 否決只在 member 的 mod log 留一行，不回報給 lead（#4002）。mod 太舊回 `compact_unsupported`。
+- 路由：`GET`／`PUT /api/hostconfig/compaction`、`GET`／`PUT /api/team/compaction/{session_id}`（App 用）、`POST /api/team/member-compaction`（lead 用）；`/mod/v1/team` 回應加 `compaction`；capability `team.compaction.v1`。
+
+### Changed
+
+- **`plugin` 觸發的壓縮回報成 `manual`（#3995）**：之前完全不回報，daemon 不會清掉過期的接力半檔。
+- **`compact context` log 印出 trigger（#3994）**：`manual`、`auto`、`plugin`，其他值記成 `unknown`。transcript 把 mod 觸發的壓縮寫成 `manual`，要分開統計來源只能靠這行。
+
+### Internal
+
+- `.wwd/tasks.toml` 的 `tsc-force` 補上 `tsc` 的標籤，不再派到 mlab（#4003）。
+- `spa/src/lib/threshold.ts`：門檻的步進、上下限與 clamp 從 `ThresholdStepper.tsx` 搬出來，元件檔只 export 元件（#4003）。
+- 停下來不修、開 issue 追蹤的：#3997（設定頁切換分頁時的儲存錯誤、鎖定開關的語意）、#4000（member-compaction 路由的理論競態等）、#4002（`--now` 被否決時回報給 lead、`/clear` 轉換窗口、events.js 拆分）。
+- `mod-hooks` 仍有 3 條與 `tool.check` 有關的已知失敗，見 #3987。
+
 ## [1.0.0-alpha.782] - 2026-11-07
 
 > **壓縮後，模型分得出哪句是使用者說的。** daemon、mod 有改：**部署 daemon 後要跑 `pdx setup`（兩台）**。SPA、wwd 都沒改：不用打包 Mac App、不重裝 wwd。依賴沒變，不用 `pnpm install`。先部署 daemon 再跑 `pdx setup`；順序反了也只是少一行結尾或不等待，不會出錯。自動接力開關、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`、閒置壓縮都沒動。
