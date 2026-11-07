@@ -215,6 +215,8 @@ type Member struct {
 	LastAt int64       `json:"last_at,omitempty"` // unix ms of its latest turn or report on that task; 0 = none
 	// RelayAskUntil is when the member's open relay ask runs out (unix ms); 0 = no ask is open (member relay ask §3.6).
 	RelayAskUntil int64 `json:"relay_ask_until,omitempty"`
+	// Compaction is the effective compaction settings of a local, active member; nil for any other row or when unreadable.
+	Compaction *CompactionEffective `json:"compaction,omitempty"`
 }
 
 // MemberTask is the member's current task as `pdx team` shows it.

@@ -30,3 +30,18 @@ type CompactionView struct {
 	Override  CompactionOverride  `json:"override"`
 	Effective CompactionEffective `json:"effective"`
 }
+
+// MemberCompactionRequest is POST /api/team/member-compaction: a lead reads (neither Set nor Reset), merges Set into,
+// or clears the override of one of its members.
+type MemberCompactionRequest struct {
+	OriginInbox string              `json:"origin_inbox"`
+	Target      string              `json:"target"`
+	Set         *CompactionOverride `json:"set,omitempty"`
+	Reset       bool                `json:"reset,omitempty"`
+}
+
+type MemberCompactionView struct {
+	Address string `json:"address"`
+	Ref     string `json:"ref"`
+	CompactionView
+}

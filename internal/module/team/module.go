@@ -645,6 +645,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)
 	mux.HandleFunc("GET "+team.CompactionRoute, m.handleCompactionGet) // the App reads a session's compaction settings
 	mux.HandleFunc("PUT "+team.CompactionRoute, m.handleCompactionPut)
+	mux.HandleFunc("POST "+team.MemberCompactionRoute, m.handleMemberCompaction) // a lead reads or changes its member's
 	mux.HandleFunc("PUT "+team.RelayQuotaRoute, m.handleRelayQuotaPut)
 	mux.HandleFunc("PUT "+team.MaxMembersRoute, m.handleMaxMembersPut)
 	mux.HandleFunc("PUT "+team.RootsRoute, m.handleRootsPut)

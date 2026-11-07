@@ -75,6 +75,19 @@ func (s *Store) SetCompactionOverride(sessionID string, o team.CompactionOverrid
 	return nil
 }
 
+// MergeCompactionOverride writes the non-nil fields of patch over the stored override in one statement, so two
+// concurrent patches of different fields both land. The caller validates patch (checkCompactionOverride): only the
+// threshold is checked and a stored one was already valid, so patch valid means the merged value is valid.
+func (s *Store) MergeCompactionOverride(sessionID string, patch team.CompactionOverride, now int64) error {
+	if _, err := s.db.Exec(`INSERT INTO session_compaction (session_id, auto, threshold, idle, updated_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET auto = COALESCE(excluded.auto, auto), threshold = COALESCE(excluded.threshold, threshold),
+		idle = COALESCE(excluded.idle, idle), updated_at = excluded.updated_at`,
+		sessionID, boolToNull(patch.Auto), intToNull(patch.Threshold), boolToNull(patch.Idle), now); err != nil {
+		return fmt.Errorf("merge compaction override %s: %w", sessionID, err)
+	}
+	return nil
+}
+
 // copyCompactionTx gives the successor session the predecessor's override; no source row, nothing to do.
 func copyCompactionTx(tx *sql.Tx, from, to string, now int64) error {
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO session_compaction (session_id, auto, threshold, idle, updated_at)
