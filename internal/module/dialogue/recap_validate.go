@@ -14,14 +14,14 @@ import (
 const (
 	maxRecapHeadline = 60
 	maxRecapDone     = 6 // items
-	maxRecapItem     = 40
-	maxRecapNow      = 80
-	maxRecapNext     = 60
+	maxRecapItem     = 80
+	maxRecapNow      = 160
+	maxRecapNext     = 160
 )
 
 // recapPrompt is the system prompt of a recap job (plan appendix B-2).
 //
-//go:embed prompts/recap-v1.txt
+//go:embed prompts/recap-v2.txt
 var recapPrompt string
 
 // recapOut is the model's answer to a recap job, and what dlg_recaps.body_json stores.
@@ -72,7 +72,7 @@ func parseRecap(text string) (recapOut, error) {
 }
 
 // repairRecap applies the limits in code: every string is redacted first; headline, now and next are cut at a word
-// boundary; empty list items are dropped, then done keeps its first six; every list item is cut to 40.
+// boundary; empty list items are dropped, then done keeps its first six; every list item is cut to 80.
 func repairRecap(o recapOut) recapOut {
 	clean := func(s string, n int) string { return cutAtWord(strings.TrimSpace(redact.String(s)), n) }
 	items := func(in []string) []string {
