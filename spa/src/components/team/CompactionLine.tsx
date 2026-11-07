@@ -21,7 +21,7 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
   const [shown, setShown] = useState<{ key: string; view: CompactionView } | null>(null)
   const [failedKey, setFailedKey] = useState<string | null>(null)
   const viewRef = useRef<CompactionView | null>(null)
-  const queue = useRef<Promise<void>>(Promise.resolve())
+  const queue = useRef<{ key: string; p: Promise<void> }>({ key, p: Promise.resolve() })
 
   const apply = useCallback((forKey: string, view: CompactionView) => {
     if (keyRef.current !== forKey) return // a late answer for another session
@@ -39,7 +39,9 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
   // Saves run one after another, each computed from the view current when it starts (two quick presses add up).
   const save = (build: (cur: CompactionView) => CompactionOverride) => {
     const forKey = key
-    queue.current = queue.current.then(async () => {
+    // One chain per session: a hung save of the last session must not hold this one's writes back.
+    if (queue.current.key !== forKey) queue.current = { key: forKey, p: Promise.resolve() }
+    queue.current.p = queue.current.p.then(async () => {
       const cur = viewRef.current
       if (cur === null || keyRef.current !== forKey) return
       setFailedKey(null)
@@ -86,7 +88,7 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
         <span className={LABEL}>{t('compaction.idle')}</span>
         <span onMouseDown={keepFocus}>
           <ToggleSwitch testId="compaction-idle" label={t('compaction.idle')} checked={eff.idle}
-            onChange={(on) => save((c) => ({ ...c.override, idle: on }))} />
+            onChange={() => save((c) => ({ ...c.override, idle: !c.effective.idle }))} />
         </span>
       </div>
       {failedKey === key && <p data-testid="compaction-error" role="status" className="px-2 text-[11px] text-status-warning-text">{t('compaction.error')}</p>}

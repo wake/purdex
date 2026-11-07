@@ -133,4 +133,50 @@ describe('CompactionLine', () => {
       expect(ev.defaultPrevented, id).toBe(true)
     }
   })
+
+  it('a hung save of the last session does not block the next one', async () => {
+    getCompaction.mockResolvedValueOnce(view())
+    const { rerender } = render(<CompactionLine hostId="h1" sessionId="S1" />)
+    await screen.findByTestId('compaction-dev')
+    putCompaction.mockImplementationOnce(() => new Promise(() => {}))
+    fireEvent.click(screen.getByTestId('compaction-discuss'))
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(1))
+    getCompaction.mockResolvedValueOnce(view({ threshold: 30 }))
+    rerender(<CompactionLine hostId="h1" sessionId="S2" />)
+    await waitFor(() => expect(screen.getByTestId('compaction-threshold-value').textContent).toBe('30%'))
+    putCompaction.mockResolvedValueOnce(view({ threshold: 35 }))
+    getCompaction.mockResolvedValueOnce(view({ threshold: 35 }))
+    fireEvent.click(screen.getByTestId('compaction-threshold-plus'))
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(2))
+    expect(putCompaction.mock.calls[1][1]).toBe('S2')
+    await waitFor(() => expect(screen.getByTestId('compaction-threshold-value').textContent).toBe('35%'))
+  })
+
+  it('two quick idle clicks flip twice, ending where they began', async () => {
+    await mount(view())
+    let release!: (v: CompactionView) => void
+    putCompaction.mockImplementationOnce(() => new Promise((r) => { release = r }))
+    fireEvent.click(screen.getByTestId('compaction-idle'))
+    fireEvent.click(screen.getByTestId('compaction-idle'))
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(1))
+    putCompaction.mockResolvedValueOnce(view())
+    getCompaction.mockResolvedValue(view({ idle: false }, { auto: null, threshold: null, idle: false }))
+    await act(async () => { release(view({ idle: false }, { auto: null, threshold: null, idle: false })) })
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(2))
+    expect(lastPut().idle).toBe(true)
+  })
+
+  it('an idle click then dev ends at the dev set', async () => {
+    await mount(view())
+    let release!: (v: CompactionView) => void
+    putCompaction.mockImplementationOnce(() => new Promise((r) => { release = r }))
+    fireEvent.click(screen.getByTestId('compaction-idle'))
+    fireEvent.click(screen.getByTestId('compaction-dev'))
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(1))
+    putCompaction.mockResolvedValueOnce(view())
+    getCompaction.mockResolvedValue(view())
+    await act(async () => { release(view({ idle: false })) })
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(2))
+    expect(lastPut()).toEqual({ auto: true, threshold: 70, idle: true })
+  })
 })
