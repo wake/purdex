@@ -17,21 +17,11 @@ func (r modReader) ModTeamRead(sessionID string) (team.ModRead, error) {
 	if err != nil {
 		return got, err
 	}
-	// Strict: the mod is handed a policy only when every setting that decides it was read (spec §3); otherwise the mod
-	// keeps its last value. (The App's compactionView stays lenient.)
-	if _, err := r.m.compaction.Compaction(); err != nil {
-		r.m.logModCompactionErr(err)
-		return got, nil
-	}
-	if got.Role == team.SeatMember && r.m.switches != nil {
-		if _, err := r.m.switches.RelaySwitches(); err != nil {
-			r.m.logModCompactionErr(err)
-			return got, nil
-		}
-	}
+	// Strict: the mod is handed a policy only when every setting that decides it was read, once (spec §3); otherwise
+	// the mod keeps its last value. (The App's compactionView stays lenient.)
 	view := r.view
 	if view == nil {
-		view = r.m.compactionView
+		view = func(sid string) (team.CompactionView, error) { return r.m.compactionViewWith(sid, true) }
 	}
 	v, err := view(sessionID)
 	if err != nil {
