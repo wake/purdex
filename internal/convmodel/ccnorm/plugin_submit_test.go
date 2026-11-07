@@ -1,6 +1,7 @@
 package ccnorm
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/convmodel"
@@ -52,5 +53,34 @@ func TestPluginSubmit_OnlyABooleanTrue(t *testing.T) {
 		if u.Source != convmodel.SourcePeer {
 			t.Errorf("asUser=%s was taken for the person's own words: %+v", name, u)
 		}
+	}
+}
+
+// What $.session.append writes (Claude Code 2.1.319): isMeta, origin plugin, no promptSource / turnOrigin / turnPosition.
+// The row is the agent's context only: it opens no turn and shows as no item. Mutation gate: drop the meta skip in user.go -> red.
+func TestPluginAppend_IsNotATurn(t *testing.T) {
+	const injected = "<injected by Purdex after compaction: not the user's words>"
+	appended := func(uuid string, sec float64) []byte {
+		return userRow(uuid, sec, injected, isMeta(), with("origin", obj{"kind": "plugin", "name": "purdex"}),
+			without("promptSource"), without("turnOrigin"), without("turnPosition"))
+	}
+	between := conv(t,
+		userRow("u1", 1, "first"), assistantText("a1", 2, "ok"), turnDuration("d1", 3, 1),
+		appended("m1", 4),
+		userRow("u2", 5, "second"), assistantText("a2", 6, "ok"), turnDuration("d2", 7, 1))
+	afterCompact := conv(t,
+		userRow("u1", 1, "first"), assistantText("a1", 2, "ok"), turnDuration("d1", 3, 1),
+		compactBoundary("b1", 4, "manual"), compactSummaryRow("s1", 5),
+		appended("m1", 6))
+	for name, c := range map[string]convmodel.Conversation{"between turns": between, "after compaction": afterCompact} {
+		if strings.Contains(dump(c), "injected by Purdex") {
+			t.Errorf("%s: the appended text reached the conversation:\n%s", name, dump(c))
+		}
+	}
+	if len(between.Turns) != 2 {
+		t.Errorf("between turns: turns = %d, want 2\n%s", len(between.Turns), dump(between))
+	}
+	if n := len(afterCompact.Turns); n != 1 {
+		t.Errorf("after compaction: turns = %d, want 1\n%s", n, dump(afterCompact))
 	}
 }
