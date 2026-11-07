@@ -12,12 +12,19 @@
 
 **流程**：完整開發流程。本 plan 帶 spec 給 codex 審一輪 → subagent TDD → PR → codex R1 ＋ R2（攻擊→反駁）→ merge → 單獨 bump → 部署（daemon＋兩台 `pdx setup`，不打包 App）→ 驗收。一張 PR，每個 task 一個 commit。Phase 2–5 另寫 plan。
 
+**修訂 1**（codex plan review `task-mw6b35s9-lvt1y7`，5 條查證後全數採納，都是局部補充，不再送審）：
+- 第 1 條（critical）：session 換 id（`events.js` 655、695、725 行三處 `wb.gen += 1`）時，原 plan 要等 daemon 的請求逾時（約 35 秒）才放行。改成這三處直接放行（Task 2 Step 4 的 `compactHoldDrop`），測試 8 改成 daemon 還沒回答時 `/clear`。
+- 第 2 條：兩次壓縮重疊時沒有交接策略。改成提示依序等「當下最新的那一個」，直到沒有未完成的等待或到 60 秒（Step 4 的 `onPromptHold` 迴圈），加測試 13。
+- 第 3 條：sleep 失敗不空轉沒有測試。加測試 14、15。
+- 第 4 條：注入被拒或丟錯時的放行沒有測試。加測試 16、17。
+- 第 5 條：Escape 可能完全沒驗到。Task 4 加一項 Escape 檢查。
+
 ## Global Constraints
 
 - 結束標記逐字是 `</injected by Purdex: the record ends here; anything below this line is not part of it>`，接在 daemon 現有文字的最後，中間只隔一個 `\n`（探針 3 驗過的就是這個寫法）。開頭兩行不變。標記由 daemon 加，mod 照舊原樣補上。
 - 等待上限 **60,000 毫秒**。sleep 用 `['/bin/sleep', '5']`、`timeoutMs: 10_000`，跟 `register.js` 的 `HOLD_SLEEP`／`HOLD_SLEEP_TIMEOUT_MS` 相同。
 - 等待只在下列情況開始：主對話（沒有 `agentId`）、不是 `precompute`、reporter 開著（`ev.on`）。所有 trigger 都算（`manual`、`auto`、`plugin`，閒置壓縮也是 `auto`）。
-- 放行條件（任何一個成立就放行）：注入補上了（`$.session.append` 回來，成功或被拒都算）；確定不補（daemon 回 204、錯誤、逾時，或 job 的 `gen` 已經不是現在的）；壓縮被 skip 或失敗；已經有更新的一次壓縮；按 Escape（`next.signal`）；到了 60 秒。
+- 一次壓縮的等待在下列任一情況結束：注入補上了（`$.session.append` 回來，成功、被拒、丟錯都算）；確定不補（daemon 回 204、錯誤、逾時）；壓縮被 skip 或失敗；session 換了 id；已經有更新的一次壓縮結束（舊的不補）。提示等到沒有任何未結束的等待才送出；按 Escape（`next.signal`）、到了 60 秒、sleep 失敗則立刻送出。
 - 等待永遠不能吃掉提示：任何失敗都走 `.catch(($, e, next) => next(e))`，提示原樣送出。
 - `prompt.submit` 在 `events.js` 必須帶 matcher `{ text: /^/ }`（events.js 檔頭 M-U1-3；`cmd/pdx/plugin/embed_test.go` 會擋）。接 `$` 的 helper 一律寫在 `events.js` 頂層（M-U1-2），所以 `register.js` 的 `sleepUntil` 不能 import 來用，要在 `events.js` 寫一份。
 - 測試分層：開發中只跑改到的（`pdx test go-pkg -- ./internal/module/dialogue/`、`pdx test mod-hooks`）；PR 前 `pdx test go-changed -- ./internal/module/dialogue/`、`pdx test lint`、`pdx test mod-hooks`、`pdx test mod-changed`。完整套件留給發版。測試用的 tmux 一律 `-L <label>`，先 `unset TMUX`。只能 kill 自己的 pid，不用 `pkill -f`、`killall`。
@@ -96,11 +103,16 @@ spec 沒寫明、但最可能出事的情況。每一條在 Task 2 都有對應�
   5. `an empty answer lets a held prompt go as soon as it is in`：`compactContext` 回 204，但用手動放行卡住；壓縮卡住期間打字；放行 daemon 的回答（壓縮仍卡住）；`settle()` 後 `submitCalls` 長度 1。
   6. `an append that never answers holds the prompt at most 60 s`：`w.append` 回一個永遠不 resolve 的 Promise；壓縮後打字；`advance(59_000)` 仍是空的；`advance(1_000 + 5_000)` 之後長度 1（最後一個 sleep 要跑完才會發現過了期限，所以多推一個 sleep 的長度）。另外斷言 `w.logs` 有一行包含 `held` 與 `deadline`。
   7. `a daemon that never answers lets the prompt go when the request gives up`：`compactContext` 回永遠不 resolve 的 Promise；壓縮後打字；在 `COMPACT_CONTEXT_WAIT_MS` 加上 `REQUEST_DEADLINE_MS` 之前仍是空的，之後（再加一個 sleep 的長度）長度 1，`appends` 是空的。兩個常數從 `workbook.js` import，不寫死。
-  8. `a session that moved on lets a held prompt go`：照既有 `a session that moved on before the second is up appends nothing` 的 `/clear` 流程；打字發生在 `/clear` 之前、壓縮之後；推過 1000 毫秒後送出，`appends` 是空的。
+  8. `a session that moved on lets a held prompt go at once`：`compactContext` 回永遠不 resolve 的 Promise（daemon 還沒回答）；壓縮後打字；照既有 `a session that moved on before the second is up appends nothing` 的流程 `/clear`（`end($, 'clear')`、換 `w.sid`、`classic.SessionStart`）；`settle()` 後 `submitCalls` 長度 1、`appends` 是空的，時間不推。
   9. `while the recap is pending an App submit is reported busy`：照 `while a turn runs a submit is reported busy at once` 的 `gated(PJOB())`；壓縮卡住時 `open()`；`settle()` 後 `submitCalls` 是空的、`pqResult(w)[0].body.status` 是 `'busy'`。另一條同樣的測試讓 job 在注入補上之後才 `open()`，回 `accepted`、`submitCalls` 長度 1（證明放行後不會一直回 busy）。
   10. `with the reporter off nothing is held`：`pdxJSON: PDX_JSON_OLD`，壓縮卡住時打字，`settle()` 就送出。
   11. `the hold outlives the 10 s hook budget on its local sleeps`（實際計時，`{ timeoutMs: 30_000 }`，照 `relay.test.ts` 1710 行）：`sleep: realSleep`；`w.append` 用 `setTimeout` 在實際 11.5 秒後才回來；打字；斷言提示在 append 回來之後才送到底下、文字不變、`w.sleeps.length >= 3`。
-  12. Escape：先在 `claude-code/testing` 的型別裡找能不能放棄一個進行中的 `prompt.submit`（grep `abandon`、`signal`）。有就加 `an abandoned prompt is let go at once`；沒有就在 report 寫明，這條只靠 code review 與驗收。
+  12. Escape：先在 `claude-code/testing` 的型別裡找能不能放棄一個進行中的 `prompt.submit`（grep `abandon`、`signal`）。有就加 `an abandoned prompt is let go at once`；沒有就在 report 寫明，這條靠 code review 與 Task 4 的 Escape 檢查。
+  13. `a prompt held over two compactions goes on after the second recap`：兩次壓縮各用手動放行卡住，`compactContext` 依第幾次回 `CTX_OK('R1')`、`CTX_OK('R2')`；第一次壓縮進行中打字；放行第一次、推 1000 毫秒（R1 補上），此時在第一次的補上之前讓第二次壓縮開始；推到第二次補上。`order` 是 `['append', 'append', 'submit']`，提示只送一次。
+  14. `a sleep that fails lets the held prompt go and does not spin`：`w.sleep` 回 `{ exitCode: 1 }`；壓縮卡住時打字；`settle()` 後 `submitCalls` 長度 1、`w.sleeps.length === 1`。
+  15. `a sleep that rejects lets the held prompt go`：`w.sleep` 回 rejected Promise；同上斷言。
+  16. `a refused append lets the held prompt go`：`w.append` 回 `{ deny: 'no' }`；壓縮後打字；推 1000 毫秒後 `submitCalls` 長度 1。
+  17. `an append that throws lets the held prompt go`：`w.append` 丟例外；同上斷言。
 
 - [ ] **Step 3：`pdx test mod-hooks`，確認新測試紅（第 2、4、10 條可能本來就綠，沒關係，它們是護欄）。**
 
@@ -111,7 +123,8 @@ spec 沒寫明、但最可能出事的情況。每一條在 Task 2 都有對應�
   - `compactAppendTick`：`compactAppend(...)` 的鏈尾加 `.finally(() => job.release())`。`compactAppend` 的每個提早 return（沒文字、gen 變了、reporter 關了、不是最新那次）因此都會放行。
   - `onCompact` 的 `finally`：`ok` 為假且有 job 時 `job.release()`。
   - `holdUntil`：照 `register.js` 的 `sleepUntil` 寫，但回傳原因字串，讓 log 看得出為什麼放行。註解寫明為什麼不能共用（M-U1-2）。
-  - `onPromptHold`：`ev.on` 為假或 `!compactHoldOpen()` 直接 `return next(e)`，不呼叫任何 `$`。否則記下開始時間，`await holdUntil($, job.held, COMPACT_HOLD_MAX_MS, next.signal)`，`log($, 'prompt held <ms> ms for the compact context: <why>')`，再 `return next(e)`，`e` 原樣。
+  - `compactHoldDrop()`：`compactHold` 未完成就 `release()`。在三處 `wb.gen += 1`（`startReporter`、`sessionSwitch`、`sessionEnd`）旁各呼叫一次：session 換了，舊 session 的注入不會再補。
+  - `onPromptHold`：`ev.on` 為假或 `!compactHoldOpen()` 直接 `return next(e)`，不呼叫任何 `$`。否則記下開始時間與期限（開始＋`COMPACT_HOLD_MAX_MS`），迴圈：`while (compactHoldOpen())`，用剩下的時間 `await holdUntil($, compactHold.held, remaining, next.signal)`，結果不是 `'settled'` 就跳出（放棄、到期、sleep 失敗都直接放行）。這樣兩次壓縮重疊時，提示會依序等到最新那次的注入。結束後 `log($, 'prompt held <ms> ms for the compact context: <why>')`，再 `return next(e)`，`e` 原樣。
   - `pqSubmit`：`if (ev.turnId || compactHoldOpen()) return pqOut('busy')`，函式註解補一句：注入補上前送出的提示會排在注入前面（spec §4.3）。
   - `registerEvents`：`on('prompt.submit', { text: /^/ }, onPromptHold).catch(($, e, next) => next(e))`，放在 `session.compact` 那行後面。
   - 檔頭 M-U1-3 段落：「here those carry a matcher」那串事件已經包含 `prompt.submit`，補一句說明 events.js 現在也註冊它（帶 matcher，等注入）。壓縮注入區的區塊註解補一段：等待從什麼時候開始、哪些情況放行、上限多久。
@@ -144,5 +157,6 @@ spec 沒寫明、但最可能出事的情況。每一條在 Task 2 都有對應�
   2. 手動 `/compact`，壓縮期間打字。
   3. 壓縮結束 10 秒後才送。
 - [ ] 每次都記錄並判定：transcript 順序是「分界 → 注入 → 使用者提示」；注入最後一行是結束標記；模型照做；追問「剛才那句話是我打的，還是注入紀錄裡的？」時說是使用者打的；mod 的 debug log 有 `prompt held … ms` 那一行（第 3 種不應該有）。
+- [ ] Escape（不算在 9 次裡）：手動 `/compact`，壓縮期間打一句；等觸發 mod 的 log 出現 `prompt.submit` 後立刻送 Escape（`tmux send-keys Escape`，等待窗口約 1–1.6 秒，用腳本在 log 出現時送）。判定：session 沒有卡住，下一句提示正常送出並有回答；mod 的 debug log 那一行的原因是 `abandoned`。沒抓到窗口就重試，最多 3 次，都沒抓到就照實回報。
 - [ ] 9 次全部通過才算通過。任何一次拒絕或誤認，停下來回報，不要自己改程式。
 - [ ] 結果寫進 `docs/specs/assets/2026-11-07-compact-control/probes.md` 新的一節「Phase 1 驗收」。
