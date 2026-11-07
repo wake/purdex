@@ -33,7 +33,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, COMPACT_APPEND_DELAY_MS, COMPACT_HOLD_MAX_MS, COMPACT_CONTEXT_URL, COMPACT_CONTEXT_WAIT_MS, compactContextBody, parseCompactContext, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, COMPACT_APPEND_DELAY_MS, COMPACT_HOLD_MAX_MS, COMPACT_CONTEXT_URL, COMPACT_CONTEXT_WAIT_MS, compactContextBody, parseCompaction, parseCompactContext, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -56,7 +56,7 @@ const TEAM_MS = 15_000 // how often the lead's member count is read
 // team is the last good answer of the daemon's team read for the CURRENT session id. The ui.render hook below only
 // looks at it (never at the socket); a change asks for a redraw. `gen` counts the session changes: an answer that left
 // before one and lands after it belongs to the old session and is dropped.
-const team = { good: false, role: 'none', members: 0, gen: 0, timer: null, pending: -1 }
+const team = { good: false, role: 'none', members: 0, compaction: null, gen: 0, timer: null, pending: -1 }
 
 // wb is the workbook job executor's state (session workbook spec §5.1): one job at a time. `busy` is the loop that polls the
 // daemon and runs what it hands out; a trigger that comes while it runs only sets `again`. `gen` counts the session ends
@@ -597,8 +597,11 @@ function teamAnswer(res) {
   const o = parse(res.text)
   if (!isObject(o) || !['lead', 'member', 'none'].includes(o.role)) return null
   if (!Number.isInteger(o.members) || o.members < 0) return null
-  return { role: o.role, members: o.members }
+  return { role: o.role, members: o.members, compaction: parseCompaction(o.compaction) }
 }
+
+// compactionPolicy is the daemon's compaction settings, or null (not managed: old daemon, bad answer, no read yet). No `$`.
+export function compactionPolicy() { return team.compaction }
 
 // readTeam asks the daemon about the current session and keeps the answer. A failed or late read changes nothing (the last
 // good value stands); an answer for a session that is gone is dropped. Only a change of the label asks for a redraw.
@@ -628,6 +631,7 @@ async function readTeam($) {
   team.good = true
   team.role = a.role
   team.members = a.members
+  team.compaction = a.compaction
   if (teamLabel() !== before) $.ui.invalidate('ui.render')
 }
 
@@ -642,6 +646,7 @@ function forgetTeam($) {
   team.good = false
   team.role = 'none'
   team.members = 0
+  team.compaction = null
   if (had) $.ui.invalidate('ui.render')
 }
 
@@ -962,7 +967,7 @@ function compactInjectStart($, e) {
   const text = new Promise((resolve) => { settle = resolve })
   let release = () => {}
   const held = new Promise((resolve) => { release = () => { job.done = true; resolve() } })
-  const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, text, settle, held, release, done: false }
+  const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, trigger: e.trigger, text, settle, held, release, done: false }
   try {
     $.clock.after(0, () => compactFetchTick($, job))
   } catch (err) { // no hold without a timer to end it
@@ -989,7 +994,7 @@ function compactFetchTick($, job) {
 }
 
 async function compactFetch($, job) {
-  const out = await wbRequest($, COMPACT_CONTEXT_URL, compactContextBody(job.stream, job.sid), COMPACT_CONTEXT_WAIT_MS)
+  const out = await wbRequest($, COMPACT_CONTEXT_URL, compactContextBody(job.stream, job.sid, job.trigger), COMPACT_CONTEXT_WAIT_MS)
   job.settle(out && out !== TIMEOUT && out.res ? parseCompactContext(out.res) : '')
 }
 
