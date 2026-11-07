@@ -18,6 +18,12 @@
 - Task 5 補執行器忙碌時的測試（第 3 條），並把定時器要呼叫的頂層函式寫明（第 4 條）；
 - Task 8 補舊 mod 相容的驗證（第 5 條）。
 
+**修訂 2**（PR #3986 的 codex R1 與 R2，取代下面相衝突的文字）：
+- mod 在建立 job 時固定 `stream`、`sid`，送出前先確認 `wb.gen` 沒變（R1-1）；
+- 有更新的一次壓縮已經結束時，舊的 job 就不補，Review Focus 1 的「兩次都各補各的」改成「最後留下的一定是最新的」（R1-2）；
+- 路由不占 `activePolls`，用自己的上限 16，超過回 429（A-1）；
+- 注入文字加第二行，講明是紀錄、不是新指示（A-2 的工具輸出部分經 critic 查證不成立：`renderStep` 不收工具結果；第二行處理的是過時的 `next` 和引用其他 session 的話）。
+
 ## Global Constraints
 
 - 注入文字第一行固定是 `<injected by Purdex after compaction: not the user's words>`。
