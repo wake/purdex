@@ -97,7 +97,13 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
   const settingsOffer = useTeamSettingsOffer(leadHost, leadTeam)
   const showSettings = offersAny(settingsOffer) && lead.tabId !== null && lead.tabId === activeTabId
   const frontSeat = [lead, ...members].find((s) => s.tabId !== null && s.tabId === activeTabId)
-  const compaction = useUnattendedStore((s) => s.byHost[leadHost]?.compactionSupport) === 'yes' && frontSeat !== undefined && !frontSeat.remote && frontSeat.hostId === leadHost
+  // `live` is the roster session's: a tab still open on a dead session gets no line.
+  const frontLive = useTeamRosterStore((s) => {
+    const r = s.byHost[leadHost]?.find((x) => x.id === leadTeam)
+    return [r?.lead, ...(r?.members ?? [])].find((x) => x?.session_id === frontSeat?.sessionId)?.live === true
+  })
+  const compactionSupported = useUnattendedStore((s) => s.byHost[leadHost]?.compactionSupport) === 'yes' && frontSeat !== undefined && !frontSeat.remote && frontSeat.hostId === leadHost
+  const compaction = compactionSupported && frontLive
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')

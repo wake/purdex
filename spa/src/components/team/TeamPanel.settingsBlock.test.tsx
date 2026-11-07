@@ -13,6 +13,9 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useHostStore, hostEndpoint } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { tabOn } from '../../lib/team/__tests__/team-fixture'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 vi.mock('../../lib/team/compaction-api', () => ({
@@ -25,6 +28,7 @@ vi.mock('./TeamSeatIcon', () => ({
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
 }))
 
+const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
 const scene = (activeTabId: string | null = 'lead') => seedScene({
   members: [['A', 'a-tm'], ['B', 'b-tm']],
   tabs: [['lead', 'lead-tm'], ['ma', 'a-tm'], ['x', null]],
@@ -150,27 +154,56 @@ describe('the compaction line of the tab in front (spec §8)', () => {
     await seen()
   })
 
-  it('none without the capability, and none when no seat is in front', () => {
+  it('none without the capability, and none when no seat is in front', async () => {
     scene('ma')
     mount()
+    await flush()
     expect(line()).toBeNull()
     cleanup()
     scene('x')
     yes()
     mount()
     expect(screen.queryByTestId('team-panel')).toBeNull()
+    await flush()
     expect(line()).toBeNull()
   })
 
-  it('a remote member has none', () => {
+  it('a session that is not live has none', async () => {
     scene('ma')
     yes()
     act(() => {
       const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
-      roster[0].members[0].host_id = 'other-daemon'
+      roster[0].members[0].live = false
       useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
     })
     mount()
+    expect(screen.getByTestId('team-panel')).toBeInTheDocument()
+    await flush()
+    expect(line()).toBeNull()
+  })
+
+  // A remote member whose daemon id maps to a configured host DOES get a seat with that host's id and its tab: only the remote guard keeps the line off.
+  it('a remote member in front (its host configured here) has none', async () => {
+    scene('mr')
+    act(() => {
+      useHostStore.setState({
+        hosts: { h2: { id: 'h2', name: 'other', ip: '2.2.2.2', port: 7860, order: 1, daemonId: 'other-daemon' } },
+        hostOrder: [HOST, 'h2'],
+        runtime: { h2: { daemonIdVerified: { endpoint: hostEndpoint({ ip: '2.2.2.2', port: 7860 }), daemonId: 'other-daemon' } } },
+      } as never)
+      useSessionStore.setState({ sessions: { ...useSessionStore.getState().sessions, h2: [{ code: 'code-a-tm', name: 'a-tm', mode: 'terminal', cwd: '~' }] as never } })
+      const tab = tabOn('mr', 'a-tm')
+      ;(tab.layout as { pane: { content: { hostId: string } } }).pane.content.hostId = 'h2'
+      useTabStore.setState((st) => ({ tabs: { ...st.tabs, mr: tab }, tabOrder: [...st.tabOrder, 'mr'] }))
+      const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
+      roster[0].members[0].host_id = 'other-daemon'
+      useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
+      useUnattendedStore.getState().setCompactionSupport(HOST, 'yes')
+      useUnattendedStore.getState().setCompactionSupport('h2', 'yes')
+    })
+    mount()
+    expect(screen.getByTestId('team-panel')).toBeInTheDocument()
+    await flush()
     expect(line()).toBeNull()
   })
 })

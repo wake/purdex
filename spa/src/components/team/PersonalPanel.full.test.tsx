@@ -38,6 +38,7 @@ const ccTab = (id: string, agent: string, extra: Record<string, unknown> = {}): 
 const addTab = (tab: Tab) => act(() => { useTabStore.setState((s) => ({ tabs: { ...s.tabs, [tab.id]: tab }, tabOrder: [...s.tabOrder, tab.id] })) })
 const setActive = (id: string) => act(() => { useTabStore.setState({ activeTabId: id }) })
 const readRoot = (session: string, root: string) => act(() => { useRootCacheStore.getState().ingest(HOST, [{ session_id: session, root_session_id: root }]) })
+const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
 const groups = () => useManualGroupsStore.getState().groups
 const q = (id: string) => screen.getByTestId(id)
 
@@ -301,11 +302,12 @@ describe('the compaction row', () => {
     scene()
     await screen.findByTestId('compaction-dev')
   })
-  it('capability not yes: none', () => {
+  it('capability not yes: none', async () => {
     scene()
+    await flush()
     expect(row()).toBeNull()
   })
-  it('Codex: none', () => {
+  it('Codex: none', async () => {
     yes()
     seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'x'] }], activeTabId: 'x' })
     addTab(ccTab('cx', 'S9', { rebuild: { sessionName: 'cx', tmuxInstance: 'i', agent: { type: 'codex', sessionId: 'S9', updatedAt: 1 }, capturedAt: 1 } }))
@@ -313,9 +315,10 @@ describe('the compaction row', () => {
     act(() => { useTeamUiStore.getState().setSharedPanelMode('full') })
     render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
     expect(q('personal-settings')).toBeInTheDocument()
+    await flush()
     expect(row()).toBeNull()
   })
-  it('ended session: none', () => {
+  it('ended session: none', async () => {
     yes()
     seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'x'] }], activeTabId: 'x' })
     addTab(ccTab('cc1', 'S1', { terminated: 'tmux-restarted' }))
@@ -323,6 +326,7 @@ describe('the compaction row', () => {
     act(() => { useTeamUiStore.getState().setSharedPanelMode('full') })
     render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
     expect(q('personal-settings')).toBeInTheDocument()
+    await flush()
     expect(row()).toBeNull()
   })
 })
