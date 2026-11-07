@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.781] - 2026-11-07
+
+> **壓縮後，agent 自動拿到 recap、之後的內容與對話檔位置。** daemon、mod、**SPA** 都有改：**部署 daemon 後要跑 `pdx setup`，這版要重新打包 Mac App，使用者要更新**。wwd 沒改，不重裝。依賴沒變，不用 `pnpm install`。先部署 daemon 再跑 `pdx setup`；順序反了也只是不注入，不會出錯。自動接力開關、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`、閒置壓縮都沒動。
+
+### Added
+
+- **壓縮時注入（#3986）**：壓縮開始時 mod 向 daemon 要注入文字，不等回應；daemon 用 trigger `compact` 要一則 recap（沒有新回合就不產），最多等 20 秒，組好文字回傳；壓縮 hook 回傳至少 1 秒後，mod 用 `$.session.append` 補進對話。內容是最新 recap、recap 之後的回合（上限 8,000 字元，留最新）、對話檔的位置。寫進 transcript 是 `isMeta` 列：模型讀得到，畫面看不到，不開回合，不進對話檔。手動、回合中自動、mod 觸發都實測通過；回合中自動壓縮從第二步開始讀到。**閒置壓縮未實測**，探針閒置 68 分鐘沒有觸發，部署後用真實紀錄驗證。
+- 路由 `POST /mod/v1/dialogue/compact-context`：用自己的上限 16，不占長輪詢名額。
+
+### Changed
+
+- **recap 字數放寬（#3986）**：`done`、`decided`、`waiting` 每條 40 → 80 字，`now` 80 → 160 字，`next` 60 → 160 字，提示文字比截斷短（60、120、120），模型超過一點不會被切。提示檔改成 `recap-v2.txt`。舊的 recap 不重產。
+
+### Fixed
+
+- **App 的 recap 來源標籤（#3986）**：`every30` 之前直接顯示英文，現在顯示「自動」；新增 `compact`「壓縮時」。
+
+### Removed
+
+- **mod 的 `/workbook refresh`（#3986）**：連同只有它在用的 fork 路徑與 `workbook.refresh` 能力一起拿掉。daemon 的路由留著回 409，舊 mod 還在跑時不會出錯。
+
+### Internal
+
+- `mod-hooks` 有 3 條與 `tool.check` 有關的測試不含這次改動也失敗，見 #3987。
+
 ## [1.0.0-alpha.780] - 2026-11-02
 
 > **個人面板拿掉未分組的提示。** 只有 **SPA** 有改：**這版要重新打包 Mac App，使用者要更新**。daemon、mod、wwd 都沒改：不用部署 daemon、不用跑 `pdx setup`、不重裝 wwd。依賴沒變，不用 `pnpm install`。
