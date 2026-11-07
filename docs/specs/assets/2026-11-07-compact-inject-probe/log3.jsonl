@@ -1,0 +1,11 @@
+{"n":1,"t":1794017495210,"kind":"compact.in","data":{"trigger":"auto","nMsgs":11}}
+{"n":2,"t":1794017506197,"kind":"compact.out","data":{"nMsgs":4,"before":120220,"after":31505}}
+{"n":3,"t":1794017506238,"kind":"append","data":{"k":1,"delay":0,"r":"efe3422a-41a0-45f0-8148-54a7069bf2e5"}}
+{"n":4,"t":1794017513860,"kind":"compact.in","data":{"trigger":"auto","nMsgs":12}}
+{"n":5,"t":1794017530036,"kind":"compact.out","data":{"nMsgs":1,"before":122622,"after":15812}}
+{"n":6,"t":1794017530349,"kind":"append","data":{"k":2,"delay":300,"r":"68299c98-6ceb-4f10-b38f-e5c6194fa6eb"}}
+{"n":7,"t":1794017542574,"kind":"compact.in","data":{"trigger":"auto","nMsgs":12}}
+{"n":8,"t":1794017559185,"kind":"compact.out","data":{"nMsgs":4,"before":123749,"after":31691}}
+{"n":9,"t":1794017559222,"kind":"append","data":{"k":3,"delay":0,"r":"082fa641-507d-4b73-9c6e-fe8e4734c45a"}}
+{"n":10,"t":1794017563020,"kind":"turn.complete","data":{"reason":"answer"}}
+{"n":11,"t":1794017588624,"kind":"turn.complete","data":{"reason":"answer"}}

@@ -1,0 +1,25 @@
+{"n":1,"t":1794016777611,"kind":"turn.start","data":{}}
+{"n":2,"t":1794016779591,"kind":"turn.complete","data":{"reason":"answer"}}
+{"n":3,"t":1794016790188,"kind":"compact.in","data":{"trigger":"manual","nMsgs":2}}
+{"n":4,"t":1794016794706,"kind":"compact.out","data":{"nMsgs":1,"before":58476,"after":15099}}
+{"n":5,"t":1794016794718,"kind":"inside.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-INSIDE-1 (appended inside the hook after next, trigger manual)"}]},"uuid":"b53f5e1f-1e22-46b8-bbd8-f8322e45ac40"}}
+{"n":6,"t":1794016794805,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-TIMER-1 (appended from a timer after the hook returned, trigger manual)"}]},"uuid":"0feac914-a10b-4742-b456-91431842a742"}}
+{"n":7,"t":1794016851447,"kind":"turn.start","data":{}}
+{"n":8,"t":1794016858498,"kind":"turn.complete","data":{"reason":"answer"}}
+{"n":9,"t":1794016873649,"kind":"turn.start","data":{}}
+{"n":10,"t":1794016888815,"kind":"compact.in","data":{"trigger":"auto","nMsgs":25}}
+{"n":11,"t":1794016902536,"kind":"compact.out","data":{"nMsgs":5,"before":116800,"after":19739}}
+{"n":12,"t":1794016902548,"kind":"inside.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-INSIDE-2 (appended inside the hook after next, trigger auto)"}]},"uuid":"393bc327-4e76-4606-a739-0b015ffb3fe6"}}
+{"n":13,"t":1794016902596,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-TIMER-2 (appended from a timer after the hook returned, trigger auto)"}]},"uuid":"40d3d410-1340-41e0-ba8b-ee64ef2d4172"}}
+{"n":14,"t":1794016914983,"kind":"compact.in","data":{"trigger":"auto","nMsgs":16}}
+{"n":15,"t":1794016928551,"kind":"compact.out","data":{"nMsgs":5,"before":112582,"after":32206}}
+{"n":16,"t":1794016928558,"kind":"inside.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-INSIDE-3 (appended inside the hook after next, trigger auto)"}]},"uuid":"b316d934-53d6-4f62-b0fe-de3acac9509c"}}
+{"n":17,"t":1794016928593,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-TIMER-3 (appended from a timer after the hook returned, trigger auto)"}]},"uuid":"fbde96a2-4f2d-47d9-8362-8d9c2bda7167"}}
+{"n":18,"t":1794016938790,"kind":"compact.in","data":{"trigger":"auto","nMsgs":15}}
+{"n":19,"t":1794016959583,"kind":"compact.out","data":{"nMsgs":4,"before":117890,"after":20165}}
+{"n":20,"t":1794016959589,"kind":"inside.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-INSIDE-4 (appended inside the hook after next, trigger auto)"}]},"uuid":"d903c15b-96ce-4d41-9fa6-9371eb49e9e1"}}
+{"n":21,"t":1794016959630,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-TIMER-4 (appended from a timer after the hook returned, trigger auto)"}]},"uuid":"eef6d931-a26c-451b-8cbb-60257b9029a8"}}
+{"n":22,"t":1794016972277,"kind":"compact.in","data":{"trigger":"auto","nMsgs":15}}
+{"n":23,"t":1794016985823,"kind":"compact.out","data":{"nMsgs":4,"before":113846,"after":31989}}
+{"n":24,"t":1794016985829,"kind":"inside.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-INSIDE-5 (appended inside the hook after next, trigger auto)"}]},"uuid":"52526d4d-c28d-47ab-bf5b-8c739e1c4f01"}}
+{"n":25,"t":1794016985868,"kind":"timer.result","data":{"message":{"type":"user","role":"user","isMeta":true,"content":[{"type":"text","text":"SPIKE-TIMER-5 (appended from a timer after the hook returned, trigger auto)"}]},"uuid":"e14c4ccf-1c54-4e39-b9b5-f6963b5f7832"}}
