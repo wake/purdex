@@ -46,6 +46,7 @@ func TestCompactCmd_Usage(t *testing.T) {
 	s := &compactStub{reply: compactView(team.CompactionOverride{}, team.CompactionEffective{Managed: true})}
 	for _, args := range [][]string{nil, {"a", "b"}, {"_m1m1m1", "--auto", "maybe"}, {"_m1m1m1", "--idle", "1"},
 		{"_m1m1m1", "--threshold", "0"}, {"_m1m1m1", "--threshold", "101"}, {"_m1m1m1", "--threshold", "5x"},
+		{"_m1m1m1", "--auto", ""}, {"_m1m1m1", "--idle", ""}, {"_m1m1m1", "--threshold", ""},
 		{"_m1m1m1", "--reset", "--auto", "on"}, {"_m1m1m1", "--reset", "--threshold", "50"}, {"_m1m1m1", "--bogus"}} {
 		code, stdout, stderr := driveTeamCmd(t, runCompactCmd, s, args...)
 		if code != ExitUsage || stdout != "" || !strings.HasPrefix(stderr, "pdx compact: ") {
@@ -134,8 +135,9 @@ func TestTeamCmd_CompactColumn(t *testing.T) {
 		t.Fatalf("header=%q rows=%d\n%s", header, len(rows), stdout)
 	}
 	for i, want := range []string{"自動 70%", "手動", "接力", "-"} {
-		if !strings.Contains(rows[i], want) {
-			t.Errorf("row %d lacks %q: %s", i, want, rows[i])
+		// Every cell before COMPACT is one word, and TASK after it is "-": the COMPACT cell is what follows the 10th field.
+		if rest := strings.Join(strings.Fields(rows[i])[10:], " "); !strings.HasPrefix(rest, want+" -") {
+			t.Errorf("row %d COMPACT cell is not %q: %s", i, want, rows[i])
 		}
 	}
 }

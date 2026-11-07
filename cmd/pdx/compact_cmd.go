@@ -23,11 +23,9 @@ func runCompact(args []string) {
 	os.Exit(runCompactCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
 }
 
-// onOff parses an on|off flag value; "" (flag not given) is nil.
+// onOff parses a given on|off flag value.
 func onOff(v string) (*bool, error) {
 	switch v {
-	case "":
-		return nil, nil
 	case "on":
 		t := true
 		return &t, nil
@@ -51,12 +49,15 @@ func runCompactCmd(ctx context.Context, args []string, getenv func(string) strin
 	if err == nil && (len(pos) != 1 || strings.TrimSpace(pos[0]) == "") {
 		err = errors.New("需要剛好一個 <ref>（_xxxxxx 或 <host>/<name>）")
 	}
-	if err == nil {
-		if set.Auto, err = onOff(*autoV); err == nil {
-			set.Idle, err = onOff(*idleV)
-		}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true }) // a flag that was given must carry a value, even ""
+	if err == nil && given["auto"] {
+		set.Auto, err = onOff(*autoV)
 	}
-	if err == nil && *thresholdV != "" {
+	if err == nil && given["idle"] {
+		set.Idle, err = onOff(*idleV)
+	}
+	if err == nil && given["threshold"] {
 		n, convErr := strconv.Atoi(*thresholdV)
 		if convErr != nil || n < 1 || n > 100 {
 			err = fmt.Errorf("--threshold 要是 1 到 100 的整數，不是 %q", *thresholdV)
