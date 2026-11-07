@@ -7,7 +7,7 @@
 // Every POST goes out from a $.clock.after timer, so each step settles or advances the mocked
 // clock before it looks at what was posted.
 import { test, expect, mock } from 'claude-code/testing'
-import { COMPACT_CONTEXT_WAIT_MS, REQUEST_DEADLINE_MS, fillRefusal, parsePromptJob } from './workbook.js'
+import { COMPACT_CONTEXT_WAIT_MS, REQUEST_DEADLINE_MS, fillRefusal, parseCompaction, parsePromptJob } from './workbook.js'
 
 const SID1 = 'aaaaaaaa-1111-4111-8111-111111111111'
 const SID2 = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -991,7 +991,7 @@ test('a compaction asks for the context and appends it a second after the hook r
   await start($, w)
   await compactOf($)
   await w.clock.advance(999)
-  expect(w.ctxReqs).toEqual([{ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1 }])
+  expect(w.ctxReqs).toEqual([{ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1, trigger: 'manual' }])
   expect(w.appends).toEqual([])
   await w.clock.advance(1)
   expect(w.appends).toEqual([APPENDED('RECAP')])
@@ -2590,4 +2590,15 @@ test('a read within the limit carries no truncated flag', async ($, on) => {
   await start($, w)
   await w.clock.settle()
   expect(pqResult(w)[0].body.truncated).toBeUndefined()
+})
+
+const POL = { managed: true, auto: false, threshold: 70, idle: true }
+test('parseCompaction keeps a complete policy and nothing else', () => {
+  expect(parseCompaction(POL)).toEqual(POL)
+  expect(parseCompaction({ ...POL, threshold: 1 })).not.toBeNull()
+  expect(parseCompaction({ ...POL, threshold: 100 })).not.toBeNull()
+  for (const bad of [null, undefined, 'x', [], {}, { ...POL, idle: undefined }, { ...POL, auto: 'no' }, { ...POL, managed: 1 },
+    { ...POL, threshold: 0 }, { ...POL, threshold: 101 }, { ...POL, threshold: 70.5 }, { ...POL, threshold: '70' }]) {
+    expect(parseCompaction(bad)).toBeNull()
+  }
 })

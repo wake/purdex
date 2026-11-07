@@ -195,8 +195,17 @@ export const COMPACT_CONTEXT_WAIT_MS = 30_000 // the daemon waits up to about 28
 export const COMPACT_APPEND_DELAY_MS = 1000 // a row appended sooner than this after the hook returned can be lost to the compaction
 export const COMPACT_HOLD_MAX_MS = 60_000 // a prompt waits at most this long for the compact context (spec §6.5)
 
-export function compactContextBody(stream, sessionId) {
-  return JSON.stringify({ stream, session_id: sessionId })
+export function compactContextBody(stream, sessionId, trigger) {
+  return JSON.stringify({ stream, session_id: sessionId, trigger })
+}
+
+// parseCompaction reads the daemon's compaction settings from the team answer; null when it is not complete and valid.
+export function parseCompaction(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const { managed, auto, threshold, idle } = v
+  if (typeof managed !== 'boolean' || typeof auto !== 'boolean' || typeof idle !== 'boolean') return null
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > 100) return null
+  return { managed, auto, threshold, idle }
 }
 
 // parseCompactContext reads the answer: the text to put into the conversation, or '' (204, an error, anything else).
