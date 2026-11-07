@@ -932,23 +932,34 @@ function compactInjectStart($, e) {
   if (e.agentId || e.trigger === 'precompute') return null
   let settle = () => {}
   const text = new Promise((resolve) => { settle = resolve })
-  const job = { gen: wb.gen, text, settle }
+  const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, text, settle }
   $.clock.after(0, () => compactFetchTick($, job))
   return job
 }
 
 // compactFetchTick tells the executor to look for the recap job, then asks for the text.
+// A session that moved on since the compaction started asks for nothing.
 function compactFetchTick($, job) {
-  wbAsk($, WAIT_MS)
-  void compactFetch($, job).catch((err) => { log($, 'compact context failed: ' + String(err)); job.settle('') })
+  try {
+    if (job.gen !== wb.gen) { job.settle(''); return }
+    wbAsk($, WAIT_MS)
+    void compactFetch($, job).catch((err) => { log($, 'compact context failed: ' + String(err)); job.settle('') })
+  } catch (err) {
+    log($, 'compact context failed: ' + String(err))
+    job.settle('')
+  }
 }
 
 async function compactFetch($, job) {
-  const out = await wbRequest($, COMPACT_CONTEXT_URL, compactContextBody(ev.stream, ev.sid), COMPACT_CONTEXT_WAIT_MS)
+  const out = await wbRequest($, COMPACT_CONTEXT_URL, compactContextBody(job.stream, job.sid), COMPACT_CONTEXT_WAIT_MS)
   job.settle(out && out !== TIMEOUT && out.res ? parseCompactContext(out.res) : '')
 }
 
+// The last row left in the conversation is the newest: compactLatest is the job of the compaction that finished last.
+let compactLatest = null
+
 function compactInjectLater($, job) {
+  compactLatest = job
   $.clock.after(COMPACT_APPEND_DELAY_MS, () => compactAppendTick($, job))
 }
 
@@ -958,7 +969,7 @@ function compactAppendTick($, job) {
 
 async function compactAppend($, job) {
   const text = await job.text
-  if (!text || job.gen !== wb.gen || !ev.on) return
+  if (!text || job.gen !== wb.gen || !ev.on || compactLatest !== job) return
   const r = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
   if (isObject(r) && r.deny !== undefined) log($, 'compact context append refused: ' + String(r.deny))
 }

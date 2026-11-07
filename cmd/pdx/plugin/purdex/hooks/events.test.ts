@@ -1116,7 +1116,19 @@ test('a refused append is logged and not tried again', async ($, on) => {
   expect(w.logs.some((l) => l.includes('append refused') && l.includes('nope'))).toBe(true)
 })
 
-test('two compactions in a row each append their own', async ($, on) => {
+test('a session that moves on before the request goes out asks for nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($) // the 0 ms timer has not run yet
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(1000)
+  expect(w.ctxReqs).toEqual([])
+  expect(w.appends).toEqual([])
+})
+
+test('a late answer from an older compaction is dropped once a newer one has ended', async ($, on) => {
   let open!: (a: Answer) => void
   const first = new Promise<Answer>((r) => { open = r })
   const w = evWorld(on, { compactContext: (_b, n) => (n === 1 ? first : CTX_OK('B')) })
@@ -1127,7 +1139,17 @@ test('two compactions in a row each append their own', async ($, on) => {
   expect(w.appends).toEqual([APPENDED('B')])
   open(CTX_OK('A'))
   await w.clock.advance(1)
-  expect(w.appends).toEqual([APPENDED('B'), APPENDED('A')])
+  expect(w.appends).toEqual([APPENDED('B')])
+})
+
+test('two compactions answered in order each append', async ($, on) => {
+  const w = evWorld(on, { compactContext: (_b, n) => CTX_OK(n === 1 ? 'A' : 'B') })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(1000)
+  await compactOf($)
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('A'), APPENDED('B')])
 })
 
 // ---- AskUserQuestion with the reporter on: ask.js's hook outside, the reporter's inside ----
