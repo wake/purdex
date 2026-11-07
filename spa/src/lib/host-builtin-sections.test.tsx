@@ -96,20 +96,20 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     clearAll()
   })
 
-  it('registers 12 built-in host-scoped contributions with moduleId _builtin.host', () => {
+  it('registers 13 built-in host-scoped contributions with moduleId _builtin.host', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
     const builtinContribs = hostContribs.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
-    expect(builtinContribs).toHaveLength(12)
+    expect(builtinContribs).toHaveLength(13)
   })
 
-  it('orders built-in contributions as: overview, sessions, hooks, agents, uploads, logs, nex, projects, commands, snapshots, peers, relay', () => {
+  it('orders built-in contributions as: overview, sessions, hooks, agents, uploads, logs, nex, projects, commands, snapshots, peers, relay, compaction', () => {
     registerBuiltinModules()
     const builtinContribs = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
     const localIds = builtinContribs.map((c) => c.localId)
     expect(localIds).toEqual([
       'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex',
-      'projects', 'commands', 'snapshots', 'peers', 'relay',
+      'projects', 'commands', 'snapshots', 'peers', 'relay', 'compaction',
     ])
   })
 
@@ -188,8 +188,8 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     clearAll()
     registerBuiltinModules()
     const second = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID).length
-    expect(first).toBe(12)
-    expect(second).toBe(12)
+    expect(first).toBe(13)
+    expect(second).toBe(13)
   })
 })
 

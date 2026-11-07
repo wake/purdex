@@ -68,6 +68,7 @@ import { CommandsSection } from '../../components/hosts/CommandsSection'
 import { SnapshotsSection } from '../../components/hosts/SnapshotsSection'
 import { PeersSection } from '../../components/hosts/PeersSection'
 import { RelaySection } from '../../components/hosts/RelaySection'
+import { CompactionSection } from '../../components/hosts/CompactionSection'
 import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
 import {
@@ -413,6 +414,7 @@ export function registerBuiltinModules(): void {
     { localId: 'snapshots', labelKey: 'hosts.snapshots', order: 9, component: SnapshotsSection },
     { localId: 'peers',     labelKey: 'hosts.peers',     order: 10, component: PeersSection },
     { localId: 'relay',     labelKey: 'hosts.relay',     order: 11, component: RelaySection },
+    { localId: 'compaction', labelKey: 'hosts.compaction', order: 12, component: CompactionSection },
   ])
 
   // Reconcile module-declared file openers with the file-opener registry.

@@ -29,6 +29,10 @@ export interface RelaySwitches {
   prompt_seed?: string
 }
 
+/** One compaction policy (host config `compaction`): auto compaction, its threshold in percent (1-100), idle compaction. */
+export interface CompactionSet { auto: boolean; threshold: number; idle: boolean }
+export interface CompactionDefaults { solo: CompactionSet; team: CompactionSet }
+
 export interface Versioned<T> { items: T; revision: number }
 
 export type PathCheckStatus = 'dir' | 'not_dir' | 'missing' | 'error' | 'unverifiable'
@@ -40,6 +44,7 @@ export interface HostConfigCollectionItems {
   'resume-templates': ResumeTemplateOverrides
   'quick-replies': QuickReply[]
   relay: RelaySwitches
+  compaction: CompactionDefaults
   /** The wwd alert delivery's switch: `PUT /api/hostconfig/wwd_alerts` (the GET carries it as `wwdAlerts`). */
   wwd_alerts: { push: boolean }
 }

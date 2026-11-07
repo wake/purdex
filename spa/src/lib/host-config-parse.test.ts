@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest'
 import {
   parseCommands,
+  parseCompaction,
   parseHostConfig,
   parseProjects,
   parseQuickReplies,
@@ -368,5 +369,22 @@ describe('parseHostConfig', () => {
     for (const body of [null, [], 'config', 3]) {
       expect(() => parseHostConfig(body, H)).toThrow(/not a JSON object/)
     }
+  })
+})
+
+describe('parseCompaction', () => {
+  const S = { auto: true, threshold: 70, idle: false }
+  it('reads a well-formed row with no problem', () => {
+    expect(parseCompaction({ items: { solo: S, team: { ...S, threshold: 1 } }, revision: 3 }, H))
+      .toEqual({ items: { solo: S, team: { ...S, threshold: 1 } }, revision: 3, problem: null })
+  })
+  it.each([
+    ['items not an object', { items: 'bad', revision: 1 }],
+    ['team missing', { items: { solo: S }, revision: 1 }],
+    ['threshold a string', { items: { solo: { ...S, threshold: '70' }, team: S }, revision: 1 }],
+    ['threshold out of range', { items: { solo: S, team: { ...S, threshold: 101 } }, revision: 1 }],
+    ['a field missing', { items: { solo: { auto: true, threshold: 70 }, team: S }, revision: 1 }],
+  ])('%s reports a shape problem', (_name, raw) => {
+    expect(parseCompaction(raw, H).problem).toEqual({ kind: 'shape' })
   })
 })
