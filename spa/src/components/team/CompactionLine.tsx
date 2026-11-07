@@ -21,7 +21,7 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
   const [shown, setShown] = useState<{ key: string; view: CompactionView } | null>(null)
   const [failedKey, setFailedKey] = useState<string | null>(null)
   const viewRef = useRef<CompactionView | null>(null)
-  const queue = useRef<{ key: string; p: Promise<void> }>({ key, p: Promise.resolve() })
+  const queues = useRef(new Map<string, Promise<void>>())
 
   const apply = useCallback((forKey: string, view: CompactionView) => {
     if (keyRef.current !== forKey) return // a late answer for another session
@@ -39,9 +39,9 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
   // Saves run one after another, each computed from the view current when it starts (two quick presses add up).
   const save = (build: (cur: CompactionView) => CompactionOverride) => {
     const forKey = key
-    // One chain per session: a hung save of the last session must not hold this one's writes back.
-    if (queue.current.key !== forKey) queue.current = { key: forKey, p: Promise.resolve() }
-    queue.current.p = queue.current.p.then(async () => {
+    // One chain per session, kept for the component's life: another session's hung save does not hold this one back, and
+    // coming back to a session chains onto its earlier saves (its writes stay in order).
+    queues.current.set(forKey, (queues.current.get(forKey) ?? Promise.resolve()).then(async () => {
       const cur = viewRef.current
       if (cur === null || keyRef.current !== forKey) return
       setFailedKey(null)
@@ -52,7 +52,7 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
       } catch {
         if (keyRef.current === forKey) setFailedKey(forKey)
       }
-    })
+    }))
   }
 
   const view = shown?.key === key ? shown.view : null

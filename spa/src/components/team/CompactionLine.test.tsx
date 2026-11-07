@@ -179,4 +179,28 @@ describe('CompactionLine', () => {
     await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(2))
     expect(lastPut()).toEqual({ auto: true, threshold: 70, idle: true })
   })
+
+  it('switching away and back keeps one ordered save chain per session', async () => {
+    getCompaction.mockResolvedValueOnce(view())
+    const { rerender } = render(<CompactionLine hostId="h1" sessionId="S1" />)
+    await screen.findByTestId('compaction-dev')
+    let release1!: (v: CompactionView) => void
+    putCompaction.mockImplementationOnce(() => new Promise((r) => { release1 = r }))
+    fireEvent.click(screen.getByTestId('compaction-threshold-plus')) // S1 PUT #1, pending
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(1))
+    getCompaction.mockResolvedValueOnce(view({ threshold: 30 }))
+    rerender(<CompactionLine hostId="h1" sessionId="S2" />)
+    await waitFor(() => expect(screen.getByTestId('compaction-threshold-value').textContent).toBe('30%'))
+    getCompaction.mockResolvedValueOnce(view())
+    rerender(<CompactionLine hostId="h1" sessionId="S1" />)
+    await waitFor(() => expect(screen.getByTestId('compaction-threshold-value').textContent).toBe('70%'))
+    putCompaction.mockResolvedValueOnce(view({ threshold: 80 }))
+    getCompaction.mockResolvedValue(view({ threshold: 80 }))
+    fireEvent.click(screen.getByTestId('compaction-threshold-plus')) // S1 PUT #2: must wait for #1
+    await act(async () => { await Promise.resolve() })
+    expect(putCompaction).toHaveBeenCalledTimes(1)
+    await act(async () => { release1(view({ threshold: 75 })) })
+    await waitFor(() => expect(putCompaction).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByTestId('compaction-threshold-value').textContent).toBe('80%'))
+  })
 })
