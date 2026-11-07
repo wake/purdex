@@ -17,7 +17,6 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
   const t = useI18nStore((s) => s.t)
   const key = `${hostId}\n${sessionId}`
   const keyRef = useRef(key)
-  keyRef.current = key
   const [shown, setShown] = useState<{ key: string; view: CompactionView } | null>(null)
   const [failedKey, setFailedKey] = useState<string | null>(null)
   const viewRef = useRef<CompactionView | null>(null)
@@ -30,6 +29,7 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
   }, [])
 
   useEffect(() => {
+    keyRef.current = key
     viewRef.current = null
     const ctl = new AbortController()
     getCompaction(hostId, sessionId, ctl.signal).then((v) => apply(key, v), () => {})
