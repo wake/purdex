@@ -1100,7 +1100,7 @@ async function onCompact($, e, next) {
   try {
     const r = await next(e)
     ok = !(isObject(r) && r.skip !== undefined)
-    if (ok) compactNowWanted = false // a compaction that really ran (auto, manual or compact-now itself) satisfies pdx compact --now
+    if (ok && !e.agentId && e.trigger !== 'precompute') compactNowWanted = false // a compaction that really ran (auto, manual or compact-now itself) satisfies pdx compact --now
     return r
   } finally {
     compactEnded($, e, ok)

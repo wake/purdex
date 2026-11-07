@@ -3112,6 +3112,23 @@ test('an idle compact-now while an auto compaction call is out does not call aga
   expect(w.compactCalls.length).toBe(1)
 })
 
+// Only a compaction of the main conversation satisfies compact-now: a subagent's and a precompute compact something else.
+for (const [name, more] of [['a subagent', { agentId: 'ag-1' }], ['a precompute', { trigger: 'precompute' }]] as [string, any][]) {
+  test(name + "'s compaction during the turn leaves compact-now waiting for the turn end", async ($, on) => {
+    const g = gated(CJOB())
+    const w = cWorld(on, g)
+    await start($, w)
+    await turnStart($, 't1')
+    g.open()
+    await w.clock.settle()
+    await compactOf($, more.trigger ?? 'manual', more.agentId ? { agentId: more.agentId } : {})
+    const before = w.compactCalls.length
+    await turnDone($, 't1')
+    await w.clock.settle()
+    expect(w.compactCalls.length).toBe(before + 1)
+  })
+}
+
 test('an aborted and a completed turn end for one turn compact once', async ($, on) => {
   const g = gated(CJOB())
   const w = cWorld(on, g)
