@@ -110,7 +110,7 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if line := quotaLine(v.LeadRelayQuota); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
-	rows := [][]string{strings.Split("ADDRESS\tHOST\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tTASK\tLAST\tCWD\tTMUX", "\t")}
+	rows := [][]string{strings.Split("ADDRESS\tHOST\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tCOMPACT\tTASK\tLAST\tCWD\tTMUX", "\t")}
 	for _, m := range v.Members {
 		pct, model, effort := "", "", ""
 		if c := m.Context; c != nil {
@@ -141,7 +141,7 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		if m.ContextUnavailable { // a remote member whose host did not answer (cross-host team spec §8)
 			pct = "(主機無回應)"
 		}
-		cells := []string{m.Address, m.HostAlias, m.Ref, m.Title, string(m.State), pct, cpu, mem, model, effort, task, last, m.Cwd, m.TmuxSession}
+		cells := []string{m.Address, m.HostAlias, m.Ref, m.Title, string(m.State), pct, cpu, mem, model, effort, compactColumn(m.Compaction), task, last, m.Cwd, m.TmuxSession}
 		for i, c := range cells {
 			if cells[i] = sanitizeCell(c); c == "" {
 				cells[i] = "-"
