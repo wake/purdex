@@ -576,9 +576,10 @@ async function pqRead($) {
   return pqOut('accepted', '', text.length === cur.text.length ? { text } : { text, truncated: true })
 }
 
-// The relay state machine lives in register.js (which imports this file): it hands over a probe once, at register time.
-let relayStateProbe = () => 'idle' // no probe set: no relay
-export function setRelayStateProbe(fn) { relayStateProbe = fn }
+// The relay state machine and the auto compaction live in register.js (which imports this file): it hands over a gate once, at register
+// time, a closure (no `$`) that answers '' to go ahead or why compact-now must yield (a relay in progress, an auto compaction in flight).
+let compactNowGate = () => '' // no gate set: nothing in the way
+export function setCompactNowGate(fn) { compactNowGate = fn }
 
 // pqCompact (pdx compact --now): a running turn compacts when it ends (compactNowWanted), an idle session from a timer, so the report
 // goes out first and the engine's call never runs inside the job.
@@ -596,6 +597,10 @@ function pqCompact($) {
 function compactNowAtTurnEnd($) {
   if (!compactNowWanted) return
   compactNowWanted = false
+  // Looked at now too, not only at the tick: an auto compaction scheduled at this same turn end has finished by the time a 0 ms tick runs,
+  // and compacting the context it just compacted is no use.
+  const why = compactNowGate()
+  if (why) { log($, 'compact now skipped: ' + why); return }
   const gen = wb.gen
   $.clock.after(0, () => compactNowTick($, gen))
 }
@@ -609,8 +614,8 @@ function compactNowTick($, gen) {
 // beginning or awaiting, and the relay replaces the context anyway.
 async function compactNow($, gen) {
   if (wb.gen !== gen) { log($, 'compact now dropped: session changed'); return }
-  const relay = relayStateProbe()
-  if (relay !== 'idle') { log($, 'compact now skipped: relay ' + relay); return }
+  const why = compactNowGate()
+  if (why) { log($, 'compact now skipped: ' + why); return }
   try {
     const r = await $.session.compact({})
     if (r && r.skip !== undefined) log($, 'compact now skipped: ' + String(r.skip))
