@@ -1822,18 +1822,63 @@ test('a session that moved on lets a held prompt go at once', async ($, on) => {
   expect(w.appends).toEqual([])
 })
 
-test('while the recap is pending an App submit is reported busy', async ($, on) => {
-  const g = gated(PJOB())
-  const c = cgate()
-  const w = evWorld(on, { promptNext: g.fn, compact: () => c.p, compactContext: () => CTX_OK() })
+for (const [name, holdMs] of [['a short hold', 100], ['a long hold', 20_000]] as [string, number][]) {
+  test(`an App submit during ${name} is submitted after the recap is appended, and accepted`, async ($, on) => {
+    const g = gated(PJOB())
+    const c = cgate()
+    const w = evWorld(on, { promptNext: g.fn, compact: () => c.p, compactContext: () => CTX_OK() })
+    await start($, w)
+    const c0 = compactOf($)
+    g.open()
+    await w.clock.advance(holdMs)
+    expect(w.submitCalls).toEqual([])
+    expect(pqResult(w)).toEqual([])
+    c.go()
+    await c0
+    await w.clock.advance(1000)
+    await w.clock.settle()
+    expect(w.order).toEqual(['append', 'submit'])
+    if (holdMs < 1000) expect(pqResult(w)[0].body.status).toBe('accepted') // the long one may run past the daemon's lease
+  })
+}
+
+test('a prompt waits for the append of a compaction that takes longer than 60 s', async ($, on) => {
+  const g = cgate()
+  const w = evWorld(on, { compact: () => g.p, compactContext: () => CTX_OK('RECAP') })
   await start($, w)
-  const c0 = compactOf($)
-  g.open()
-  await w.clock.settle()
+  const c = compactOf($)
+  await w.clock.advance(59_000)
+  void typed($, 'q') // the engine runs prompt.submit when the compaction has ended; this one is typed just before
+  await w.clock.advance(2000) // the compaction runs 61 s: no timer on the hold while it does
   expect(w.submitCalls).toEqual([])
-  expect(pqResult(w)[0].body.status).toBe('busy')
-  c.go()
-  await c0
+  g.go()
+  await c
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.order).toEqual(['append', 'submit'])
+})
+
+test('a held prompt is never kept past its own 60 s by a newer compaction', async ($, on) => {
+  const g1 = cgate()
+  const g2 = cgate()
+  let n = 0
+  const w = evWorld(on, { compact: () => (n++ === 0 ? g1.p : g2.p), compactContext: (_b, k) => CTX_OK('R' + k) })
+  await start($, w)
+  const c1 = compactOf($)
+  g1.go()
+  await c1
+  void typed($, 'q')
+  await w.clock.advance(500)
+  const c2 = compactOf($) // the newer compaction outlives the prompt's deadline
+  await w.clock.advance(500) // R1 is appended, the hold turns to the newer job
+  expect(w.appends).toEqual([APPENDED('R1')])
+  await w.clock.advance(58_999)
+  expect(w.submitCalls).toEqual([])
+  await w.clock.advance(1)
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  g2.go()
+  await c2
 })
 
 test('once the recap is in an App submit is accepted', async ($, on) => {

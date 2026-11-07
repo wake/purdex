@@ -516,10 +516,19 @@ async function clearIfOurs($, own) {
 // A submit goes only while no turn runs: $.prompt.submit does not refuse mid-turn, it blocks until the session is idle, so a
 // turn in progress is reported `busy` at once and the App sends again when it is idle. The text goes in as the person's own
 // words (asUser), which is also how the transcript shows it.
-// A submit while the compact context is pending is reported busy too: a prompt sent before the recap is appended would
-// sit in front of it (spec §4.3).
+// A submit while the compact context is pending waits for it (at most COMPACT_HOLD_MAX_MS, on the clock: pqRun runs in a
+// timer, so there is no hook budget to keep alive): sent before the recap is appended it would sit in front of it (spec §4.3).
+// `busy` would not do, the App gives up after a few retries. A result that comes after the daemon's 10 s lease may turn into
+// `unknown` there, as it did before when $.prompt.submit blocked through a compaction; the job is never handed again.
 async function pqSubmit($, job) {
-  if (ev.turnId || compactHoldOpen()) return pqOut('busy')
+  if (ev.turnId) return pqOut('busy')
+  const deadline = (await $.clock.now()) + COMPACT_HOLD_MAX_MS
+  while (compactHoldOpen()) {
+    const left = deadline - (await $.clock.now())
+    if (left <= 0) break
+    await Promise.race([compactHold.held, $.clock.sleep(left)])
+  }
+  if (ev.turnId) return pqOut('busy') // a typed prompt may have started a turn meanwhile
   const r = await $.prompt.submit({ text: job.text, asUser: true })
   if (isObject(r) && typeof r.drop === 'string') return pqOut('dropped', r.drop || 'dropped')
   return pqOut('accepted')
@@ -953,10 +962,15 @@ function compactInjectStart($, e) {
   let release = () => {}
   const held = new Promise((resolve) => { release = () => { job.done = true; resolve() } })
   const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, text, settle, held, release, done: false }
+  try {
+    $.clock.after(0, () => compactFetchTick($, job))
+  } catch (err) { // no hold without a timer to end it
+    log($, 'compact context failed: ' + String(err))
+    job.release()
+    return null
+  }
   compactHold = job
-  $.clock.after(COMPACT_HOLD_MAX_MS, () => job.release()) // the job itself ends 60 s after the compaction started (idempotent)
   text.then((t) => { if (!t) job.release() })
-  $.clock.after(0, () => compactFetchTick($, job))
   return job
 }
 
@@ -983,7 +997,14 @@ let compactLatest = null
 
 function compactInjectLater($, job) {
   compactLatest = job
-  $.clock.after(COMPACT_APPEND_DELAY_MS, () => compactAppendTick($, job))
+  try {
+    $.clock.after(COMPACT_APPEND_DELAY_MS, () => compactAppendTick($, job))
+    // the hold ends this long after the compaction ENDED (while it runs, the compaction itself bounds the hold)
+    $.clock.after(COMPACT_HOLD_MAX_MS, () => job.release())
+  } catch (err) {
+    log($, 'compact context append not scheduled: ' + String(err))
+    job.release()
+  }
 }
 
 function compactAppendTick($, job) {
@@ -1029,9 +1050,10 @@ async function holdUntil($, target, ms, signal) {
     signal.addEventListener('abort', () => resolve('abandoned'), { once: true })
   })
   const deadline = (await $.clock.now()) + ms
+  const expired = $.clock.sleep(Math.max(0, ms)).then(() => 'deadline', () => new Promise(() => {})) // never waits past the deadline; a sleep the engine cut says nothing (the tick and the clock check still bound it)
   for (;;) {
     const tick = $.process.run(HOLD_SLEEP, { timeoutMs: HOLD_SLEEP_TIMEOUT_MS }).then((r) => (r.exitCode === 0 ? HOLD_TICK : 'failed'), () => 'failed')
-    const r = await Promise.race([settled, abandoned, tick])
+    const r = await Promise.race([settled, abandoned, expired, tick])
     if (r !== HOLD_TICK) return r
     if ((await $.clock.now()) >= deadline) return 'deadline'
   }
