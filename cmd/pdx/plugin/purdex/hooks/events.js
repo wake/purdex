@@ -997,13 +997,20 @@ let compactLatest = null
 
 function compactInjectLater($, job) {
   compactLatest = job
+  // Two tries, the append first: if no append is coming, prompts go at once; if the append is scheduled, only its own end
+  // (or the timeout below) may release the job, or a prompt would go in front of the recap.
   try {
     $.clock.after(COMPACT_APPEND_DELAY_MS, () => compactAppendTick($, job))
-    // the hold ends this long after the compaction ENDED (while it runs, the compaction itself bounds the hold)
-    $.clock.after(COMPACT_HOLD_MAX_MS, () => job.release())
   } catch (err) {
     log($, 'compact context append not scheduled: ' + String(err))
     job.release()
+    return
+  }
+  try {
+    // the hold ends this long after the compaction ENDED (while it runs, the compaction itself bounds the hold)
+    $.clock.after(COMPACT_HOLD_MAX_MS, () => job.release())
+  } catch (err) {
+    log($, 'compact hold timeout not scheduled: ' + String(err))
   }
 }
 
