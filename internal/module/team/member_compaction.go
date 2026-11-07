@@ -55,25 +55,34 @@ func (m *Module) handleMemberCompaction(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		// A relay's clear copies the override to the successor in one tx; a write that lands on the predecessor after it is lost.
-		if op, open, err := m.memberRelayOpen(mr.SessionID); err != nil {
-			fail(err)
-			return
-		} else if open {
-			m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "member " + mr.Ref + " is relaying; change its compaction settings after the relay", Op: &op})
-			return
-		}
-		if _, err := m.compactionView(mr.SessionID); err != nil { // nothing is written when the answer cannot be read back
-			fail(err)
-			return
-		}
-		if req.Set != nil {
-			err = m.store.MergeCompactionOverride(mr.SessionID, *req.Set, m.now())
-		} else {
-			err = m.store.SetCompactionOverride(mr.SessionID, team.CompactionOverride{}, m.now())
-		}
-		if err != nil {
-			fail(err)
+		// A relay's clear copies the override to the successor in one tx, and every relay op is created under createMu: holding it
+		// across the check and the write means no relay can start and clear in between and leave the write on the predecessor.
+		if !func() bool {
+			m.createMu.Lock()
+			defer m.createMu.Unlock()
+			if op, open, err := m.memberRelayOpen(mr.SessionID); err != nil {
+				fail(err)
+				return false
+			} else if open {
+				m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "member " + mr.Ref + " is relaying; change its compaction settings after the relay", Op: &op})
+				return false
+			}
+			if _, err := m.compactionView(mr.SessionID); err != nil { // nothing is written when the answer cannot be read back
+				fail(err)
+				return false
+			}
+			var err error
+			if req.Set != nil {
+				err = m.store.MergeCompactionOverride(mr.SessionID, *req.Set, m.now())
+			} else {
+				err = m.store.SetCompactionOverride(mr.SessionID, team.CompactionOverride{}, m.now())
+			}
+			if err != nil {
+				fail(err)
+				return false
+			}
+			return true
+		}() {
 			return
 		}
 	}
