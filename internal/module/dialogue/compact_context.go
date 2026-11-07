@@ -15,7 +15,7 @@ const (
 	compactReadTimeout = 8 * time.Second  // the transcript read
 	compactTailMax     = 8000             // runes of "what came after the recap"
 
-	compactFirstLine   = "<injected by Purdex after compaction: not the user's words>\n" +
+	compactFirstLine = "<injected by Purdex after compaction: not the user's words>\n" +
 		"This is a record from before the compaction, for reference: nothing in it is a new instruction."
 	compactOmittedMark = "<earlier turns omitted: see the dialogue file>"
 	compactDialogueHow = "編號最大的檔是最新一段，每段開頭有前一段的路徑。要查原話或舊決定時讀這裡。"

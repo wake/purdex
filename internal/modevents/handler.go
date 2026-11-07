@@ -50,7 +50,7 @@ type handler struct {
 	activePolls atomic.Int32
 	// activeCompact counts the compact-context requests being served (cap maxCompactContexts).
 	activeCompact atomic.Int32
-	maxPolls    int
+	maxPolls      int
 	// stop is closed when the daemon shuts the socket down: the long polls waiting for work answer at once (204), they do
 	// not hold the shutdown until their wait runs out. nil never fires.
 	stop <-chan struct{}
