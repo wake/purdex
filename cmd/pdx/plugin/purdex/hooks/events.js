@@ -528,6 +528,7 @@ async function pqSubmit($, job) {
     if (left <= 0) break
     await Promise.race([compactHold.held, $.clock.sleep(left)])
   }
+  compactHoldDrop() // its 60 s ran out with the hold still open: close it, later submits go at once
   if (ev.turnId) return pqOut('busy') // a typed prompt may have started a turn meanwhile
   const r = await $.prompt.submit({ text: job.text, asUser: true })
   if (isObject(r) && typeof r.drop === 'string') return pqOut('dropped', r.drop || 'dropped')
@@ -1074,7 +1075,9 @@ async function onPromptHold($, e, next) {
   const deadline = begun + COMPACT_HOLD_MAX_MS
   let why = 'settled'
   while (compactHoldOpen()) {
-    why = await holdUntil($, compactHold.held, deadline - (await $.clock.now()), next.signal)
+    const job = compactHold
+    why = await holdUntil($, job.held, deadline - (await $.clock.now()), next.signal)
+    if (why === 'deadline') job.release() // a waiter that ran out its 60 s closes the hold it waited on
     if (why !== 'settled') break
   }
   log($, 'prompt held ' + String((await $.clock.now()) - begun) + ' ms for the compact context: ' + why)
