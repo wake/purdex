@@ -1,0 +1,1 @@
+{ "name": "compact-trigger-probe", "version": "0.0.1", "description": "Throwaway probe: compacts at turn end on ctl.json; logs prompt.submit, turn.start and compaction timing" }
