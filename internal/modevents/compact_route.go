@@ -13,6 +13,9 @@ const CompactContextPath = "/mod/v1/dialogue/compact-context"
 // compactContextDeadline: 20 s waiting for the recap + 8 s reading the transcript + slack. The server's WriteTimeout is 10 s.
 const compactContextDeadline = 35 * time.Second
 
+// maxCompactContexts has its own count: a request holds its slot up to 28 s, and must not starve the `next` long polls.
+const maxCompactContexts = 16
+
 // CompactContextService is what a WorkbookService may also implement; one that does not makes the route a 503.
 type CompactContextService interface {
 	CompactContext(ctx context.Context, sessionID string) (string, bool)
@@ -45,12 +48,12 @@ func (h *handler) compactContext(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if h.activePolls.Add(1) > int32(h.maxPolls) {
-		h.activePolls.Add(-1)
+	if h.activeCompact.Add(1) > maxCompactContexts {
+		h.activeCompact.Add(-1)
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "busy"})
 		return
 	}
-	defer h.activePolls.Add(-1)
+	defer h.activeCompact.Add(-1)
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(compactContextDeadline))
 	ctx, cancel := h.pollContext(r)
 	defer cancel()

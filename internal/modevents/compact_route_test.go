@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,12 +20,14 @@ type compactWB struct {
 	calls    atomic.Int32
 	nextSeen atomic.Int32 // fakeWB.running at the moment CompactContext ran
 	ended    chan struct{}
+	hold     chan struct{} // when set, the call waits until it is closed
 }
 
 func (c *compactWB) CompactContext(ctx context.Context, sid string) (string, bool) {
 	c.calls.Add(1)
 	c.nextSeen.Store(c.fakeWB.running.Load())
 	select {
+	case <-c.hold:
 	case <-time.After(c.delay):
 	case <-ctx.Done():
 		if c.ended != nil {
@@ -121,6 +124,56 @@ func TestCompactContext_RunsBesideAWaitingNext(t *testing.T) {
 		t.Fatalf("%d %s next running=%d", rec.Code, rec.Body, c.nextSeen.Load())
 	}
 	<-done
+}
+
+// Mutation gate: take h.activePolls in the route → next answers 429 → red.
+func TestCompactContext_DoesNotTakeThePollSlots(t *testing.T) {
+	c := &compactWB{fakeWB: &fakeWB{delay: 100 * time.Millisecond}, delay: time.Minute, hold: make(chan struct{})}
+	h := compactHandler(c, withMaxPolls(1))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID))
+	}()
+	for i := 0; c.calls.Load() == 0; i++ {
+		if i > 200 {
+			t.Fatal("the service never ran")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec := post(t, h, http.MethodPost, WorkbookNextPath, nextBody(testStream, testSID, 5000)); rec.Code == http.StatusTooManyRequests {
+		t.Fatalf("next was refused while a compact-context was held: %d %s", rec.Code, rec.Body)
+	}
+	close(c.hold)
+	<-done
+}
+
+// Mutation gate: drop the cap → the extra request is not 429 → red.
+func TestCompactContext_TooManyIs429(t *testing.T) {
+	c := &compactWB{fakeWB: &fakeWB{}, text: "recap", delay: time.Minute, hold: make(chan struct{})}
+	h := compactHandler(c)
+	var wg sync.WaitGroup
+	for i := 0; i < maxCompactContexts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID))
+		}()
+	}
+	for i := 0; int(c.calls.Load()) < maxCompactContexts; i++ {
+		if i > 300 {
+			t.Fatal("the held requests never all reached the service")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec := post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID)); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("over the cap: %d %s", rec.Code, rec.Body)
+	}
+	close(c.hold)
+	wg.Wait()
+	if rec := post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID)); rec.Code != http.StatusOK {
+		t.Fatalf("after release: %d %s", rec.Code, rec.Body)
+	}
 }
 
 // Mutation gate: drop SetWriteDeadline → the client gets an EOF → red.
