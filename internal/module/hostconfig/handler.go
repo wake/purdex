@@ -89,6 +89,8 @@ func emptyFor(key string) string {
 		return watchDefaultJSON
 	case KeyRelayQuota:
 		return relayQuotaJSON
+	case KeyCompaction:
+		return compactionJSON
 	case KeyFleet:
 		return fleetDefaultJSON
 	}
@@ -107,6 +109,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 		"team":            KeyTeam,
 		"resources":       KeyResources,
 		"relayQuota":      KeyRelayQuota,
+		"compaction":      KeyCompaction,
 		"workbook":        KeyWorkbook,
 		"wwdAlerts":       KeyWwdAlerts,
 		"watch":           KeyWatch,

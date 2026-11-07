@@ -354,6 +354,9 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 			VALUES (?, ?, ?, ?, ?)`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lineage: %w", id, err)
 		}
+		if err := copyCompactionTx(tx, cur.SessionID, r.NewSessionID, r.At); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+		}
 		// A self relay that moves a MEMBER row (only a person's manual relay can: MR-1, D3) carries that row's team, so the
 		// lead can be told when it is done. The team is the OLD session's row, read before the move: a lead's or a solo
 		// session's self op has no member row (no stamp), and the target's own role never counts.

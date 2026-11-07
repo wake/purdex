@@ -59,6 +59,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(UnattendedKey, m)
 	// ... and the relay-quota rule's switch through this one (#2062).
 	c.Registry.Register(RelayQuotaKey, m)
+	// ... and the compaction defaults through this one (compaction-control spec 5.1).
+	c.Registry.Register(CompactionKey, m)
 	// ... and the session workbook setting through this one (workbook plan WB-1b.1).
 	c.Registry.Register(workbooksettings.Key, m)
 	// ... and the load watcher's setting through this one (host-load-control plan W1b-3) ...
@@ -88,6 +90,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte, _ Entry) (any, error) { return normalizeRelay(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte, _ Entry) (any, error) { return normalizeTeam(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte, _ Entry) (any, error) { return normalizeRelayQuota(raw) }))
+	mux.HandleFunc("GET /api/hostconfig/compaction", m.handleGetCompaction)
+	mux.HandleFunc("PUT /api/hostconfig/compaction", m.putHandler(KeyCompaction, func(raw []byte, _ Entry) (any, error) { return normalizeCompaction(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte, _ Entry) (any, error) { return normalizeWorkbook(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/wwd_alerts", m.putHandler(KeyWwdAlerts, func(raw []byte, _ Entry) (any, error) { return normalizeWwdAlerts(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/watch", m.putHandler(KeyWatch, func(raw []byte, cur Entry) (any, error) {

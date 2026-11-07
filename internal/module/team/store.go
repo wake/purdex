@@ -351,6 +351,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (fact log): %w", err)
 	}
+	if _, err := db.Exec(compactionSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (session compaction): %w", err)
+	}
 	if _, err := db.Exec(modHelloSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (mod hello): %w", err)

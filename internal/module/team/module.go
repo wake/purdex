@@ -99,6 +99,13 @@ type Module struct {
 	// prompts is the relay prompt bodies (host config, spec §8.8), read
 	// on every GET /api/relay/prompts.
 	prompts hostconfig.RelayPromptReader
+	// compaction is the host's compaction defaults row; compactionLog keeps one unreadable-row error to one log line.
+	compaction    hostconfig.CompactionReader
+	compactionLog struct {
+		mu  sync.Mutex
+		msg string
+		at  time.Time
+	}
 	// unattended is the U23 switch (host config), read under createMu by
 	// every create and sweep; unattendedErr (under createMu) is the last
 	// read error logged, so a corrupt value logs once, not every tick.
@@ -509,6 +516,9 @@ func (m *Module) Init(c *core.Core) error {
 		return err
 	}
 	m.prompts = prompts
+	if m.compaction, err = lookup[hostconfig.CompactionReader](c, hostconfig.CompactionKey); err != nil {
+		return err
+	}
 	if m.unattended, err = lookup[hostconfig.UnattendedStore](c, hostconfig.UnattendedKey); err != nil {
 		return err
 	}
@@ -630,6 +640,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	// U23: the unattended switch (unattended spec D-U23-1, D-U23-6), the App's.
 	mux.HandleFunc("GET "+UnattendedRoute, m.handleUnattendedGet)
 	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)
+	mux.HandleFunc("GET "+team.CompactionRoute, m.handleCompactionGet) // the App reads a session's compaction settings
+	mux.HandleFunc("PUT "+team.CompactionRoute, m.handleCompactionPut)
 	mux.HandleFunc("PUT "+team.RelayQuotaRoute, m.handleRelayQuotaPut)
 	mux.HandleFunc("PUT "+team.MaxMembersRoute, m.handleMaxMembersPut)
 	mux.HandleFunc("PUT "+team.RootsRoute, m.handleRootsPut)
