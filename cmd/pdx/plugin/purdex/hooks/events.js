@@ -954,6 +954,7 @@ function compactInjectStart($, e) {
   const held = new Promise((resolve) => { release = () => { job.done = true; resolve() } })
   const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, text, settle, held, release, done: false }
   compactHold = job
+  $.clock.after(COMPACT_HOLD_MAX_MS, () => job.release()) // the job itself ends 60 s after the compaction started (idempotent)
   text.then((t) => { if (!t) job.release() })
   $.clock.after(0, () => compactFetchTick($, job))
   return job

@@ -1761,7 +1761,37 @@ test('an append that never answers holds the prompt at most 60 s', async ($, on)
   expect(w.submitCalls).toEqual([])
   await w.clock.advance(1000 + ONE_SLEEP_MS)
   expect(w.submitCalls.length).toBe(1)
-  expect(w.logs.some((l) => l.includes('held') && l.includes('deadline'))).toBe(true)
+  expect(w.logs.some((l) => l.includes('prompt held'))).toBe(true) // ends by the job's own 60 s or the prompt's, whichever fires first
+})
+
+test('a hold that expires frees the job: a later prompt goes on at once', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK(), append: () => never() })
+  await start($, w)
+  await compactOf($)
+  void typed($, 'A')
+  await w.clock.advance(60_000 + ONE_SLEEP_MS)
+  expect(w.submitCalls.length).toBe(1)
+  const n = w.sleeps.length
+  void typed($, 'B')
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(2)
+  expect(w.sleeps.length).toBe(n)
+})
+
+test('after the hold expires an App submit is accepted', async ($, on) => {
+  // the standing poll cannot sit out 65 s of mocked time, so it answers 204 until the job is ready
+  let ready = false
+  let given = false
+  const promptNext = (): Answer => (ready && !given ? ((given = true), { status: 200, text: JSON.stringify({ job: PJOB() }) }) : { status: 204 })
+  const w = evWorld(on, { promptNext, compactContext: () => CTX_OK(), append: () => never() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(60_000 + ONE_SLEEP_MS)
+  expect(w.submitCalls).toEqual([])
+  ready = true
+  await w.clock.advance(60_000)
+  expect(pqResult(w)[0].body.status).toBe('accepted')
+  expect(w.submitCalls.length).toBe(1)
 })
 
 test('a daemon that never answers lets the prompt go when the request gives up', async ($, on) => {
