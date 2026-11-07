@@ -3025,6 +3025,34 @@ test('a pending compact-now does not compact when a relay is starting at the sam
   expect(w.logs.some((l) => l.includes('compact now skipped: relay'))).toBe(true)
 })
 
+// Auto compaction and compact-now at one turn end are two compactions of the same context: compact-now yields.
+test('compact-now waiting for a turn end that also triggers the auto compaction compacts once', async ($, on) => {
+  const g = gated(CJOB())
+  const w = autoWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+  expect(w.logs.some((l) => l.includes('compact now skipped: auto compaction'))).toBe(true)
+})
+
+test('an idle compact-now while an auto compaction call is out does not call again', async ($, on) => {
+  const g = gated(CJOB())
+  const w = autoWorld(on, { promptNext: g.fn, compact: () => never() as any })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1) // the auto one, still out
+  g.open()
+  await w.clock.settle()
+  expect(compactResult(w)).toMatchObject({ status: 'accepted', reason: 'now' })
+  expect(w.compactCalls.length).toBe(1)
+})
+
 test('an aborted and a completed turn end for one turn compact once', async ($, on) => {
   const g = gated(CJOB())
   const w = cWorld(on, g)
