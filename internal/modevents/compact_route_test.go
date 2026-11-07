@@ -21,10 +21,12 @@ type compactWB struct {
 	nextSeen atomic.Int32 // fakeWB.running at the moment CompactContext ran
 	ended    chan struct{}
 	hold     chan struct{} // when set, the call waits until it is closed
+	trigger  atomic.Value  // the last trigger the route handed over
 }
 
-func (c *compactWB) CompactContext(ctx context.Context, sid string) (string, bool) {
+func (c *compactWB) CompactContext(ctx context.Context, sid, trigger string) (string, bool) {
 	c.calls.Add(1)
+	c.trigger.Store(trigger)
 	c.nextSeen.Store(c.fakeWB.running.Load())
 	select {
 	case <-c.hold:
@@ -91,6 +93,27 @@ func TestCompactContext_TextOr204(t *testing.T) {
 	c.text = ""
 	if rec := post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID)); rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
 		t.Fatalf("%d %q", rec.Code, rec.Body)
+	}
+}
+
+// Only the known triggers reach the service; anything else (forged log lines, floods) becomes "unknown".
+func TestCompactContext_UnknownTriggerBecomesUnknown(t *testing.T) {
+	for trig, want := range map[string]string{
+		"":                               "",
+		"manual":                         "manual",
+		"auto":                           "auto",
+		"plugin":                         "plugin",
+		"plugin\n[dialogue] forged=true": "unknown",
+		strings.Repeat("x", 10*1024):     "unknown",
+	} {
+		c := &compactWB{fakeWB: &fakeWB{}, text: "t"}
+		body := fmt.Sprintf(`{"stream":%q,"session_id":%q,"trigger":%q}`, testStream, testSID, trig)
+		if rec := post(t, compactHandler(c), http.MethodPost, CompactContextPath, body); rec.Code != 200 {
+			t.Fatalf("%d", rec.Code)
+		}
+		if got, _ := c.trigger.Load().(string); got != want {
+			t.Errorf("trigger %.20q -> %q, want %q", trig, got, want)
+		}
 	}
 }
 
@@ -218,5 +241,21 @@ func TestCompactContext_StopEndsTheWait(t *testing.T) {
 	}
 	if code := <-codes; code != http.StatusNoContent {
 		t.Fatalf("code %d", code)
+	}
+}
+
+func TestCompactContext_TriggerPassedThrough(t *testing.T) {
+	c := &compactWB{fakeWB: &fakeWB{}, text: "x"}
+	h := compactHandler(c)
+	body := fmt.Sprintf(`{"stream":%q,"session_id":%q,"trigger":"plugin"}`, testStream, testSID)
+	if rec := post(t, h, http.MethodPost, CompactContextPath, body); rec.Code != 200 {
+		t.Fatal(rec.Code)
+	}
+	if got := c.trigger.Load(); got != "plugin" {
+		t.Fatalf("trigger %v", got)
+	}
+	post(t, h, http.MethodPost, CompactContextPath, compactBody(testStream, testSID))
+	if got := c.trigger.Load(); got != "" {
+		t.Fatalf("old mod: trigger %q", got)
 	}
 }

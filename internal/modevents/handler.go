@@ -23,6 +23,16 @@ type TeamRead struct {
 	Role      string `json:"role"` // lead | member | none
 	Members   int    `json:"members"`
 	TeamLabel string `json:"team_label"`
+	// Compaction is absent when the daemon could not read the effective settings (the mod keeps its last value).
+	Compaction *TeamCompaction `json:"compaction,omitempty"`
+}
+
+// TeamCompaction is the session's effective compaction settings as the mod reads them (spec §6.1).
+type TeamCompaction struct {
+	Managed   bool `json:"managed"`
+	Auto      bool `json:"auto"`
+	Threshold int  `json:"threshold"`
+	Idle      bool `json:"idle"`
 }
 
 // TeamReader answers for one session id. An error is "could not tell", never "none"; ErrTeamUnavailable (the team

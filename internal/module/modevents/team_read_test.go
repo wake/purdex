@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,4 +76,19 @@ func TestTeamRead_NotServedOnTheTCPMux(t *testing.T) {
 		}
 	}
 	var _ = modevents.TeamPath
+}
+
+// The team module's compaction answer is copied over as is; nil stays nil.
+func TestTeamRead_CompactionIsCopied(t *testing.T) {
+	m, c, _ := started(t, shortDir(t))
+	f := &fakeModReader{read: team.ModRead{Role: "lead", Compaction: &team.CompactionEffective{Managed: true, Auto: true, Threshold: 70, Idle: true}}}
+	c.Registry.Register(team.ModReadKey, team.ModReader(f))
+	code, body := socketGet(t, m.path, "/mod/v1/team?session_id=s1")
+	if want := `{"role":"lead","members":0,"team_label":"","compaction":{"managed":true,"auto":true,"threshold":70,"idle":true}}`; code != 200 || body != want {
+		t.Fatalf("%d %s", code, body)
+	}
+	f.read.Compaction = nil
+	if _, body := socketGet(t, m.path, "/mod/v1/team?session_id=s1"); strings.Contains(body, "compaction") {
+		t.Fatalf("nil leaked: %s", body)
+	}
 }

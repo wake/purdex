@@ -37,6 +37,12 @@ func (m *Module) compactionDefaults() hostconfig.CompactionDefaults {
 // compactionView is a session's override and the settings that apply: override ?? host default of its role. Self relay
 // on, or a member while member_auto is on, means relay owns compaction (managed false); the values are filled anyway.
 func (m *Module) compactionView(sessionID string) (team.CompactionView, error) {
+	return m.compactionViewWith(sessionID, false)
+}
+
+// compactionViewWith reads each deciding setting once. strict (the mod's read) returns the error of an unreadable host
+// row or member_auto switch instead of falling back to the defaults / "off" (spec §3: no policy is better than a guess).
+func (m *Module) compactionViewWith(sessionID string, strict bool) (team.CompactionView, error) {
 	role, state, _, err := m.selfRelayState(sessionID)
 	if err != nil {
 		return team.CompactionView{}, err
@@ -45,7 +51,26 @@ func (m *Module) compactionView(sessionID string) (team.CompactionView, error) {
 	if err != nil {
 		return team.CompactionView{}, err
 	}
-	d := m.compactionDefaults()
+	var d hostconfig.CompactionDefaults
+	if strict {
+		if d, err = m.compaction.Compaction(); err != nil {
+			return team.CompactionView{}, err
+		}
+	} else {
+		d = m.compactionDefaults()
+	}
+	memberAuto := false
+	if role == roleMember {
+		if strict && m.switches != nil {
+			sw, err := m.switches.RelaySwitches()
+			if err != nil {
+				return team.CompactionView{}, err
+			}
+			memberAuto = sw.MemberAuto
+		} else {
+			memberAuto = m.memberAutoOn()
+		}
+	}
 	set := d.Team
 	if role == roleNone {
 		set = d.Solo
@@ -61,7 +86,7 @@ func (m *Module) compactionView(sessionID string) (team.CompactionView, error) {
 		e.Idle = *o.Idle
 	}
 	switch {
-	case role == roleMember && m.memberAutoOn():
+	case role == roleMember && memberAuto:
 		e.Managed, e.Reason = false, team.CompactionReasonMemberAuto
 	case state == "on":
 		e.Managed, e.Reason = false, team.CompactionReasonSelfRelay

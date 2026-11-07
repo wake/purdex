@@ -140,7 +140,11 @@ func (m *Module) teamRead(sessionID string) (modevents.TeamRead, error) {
 	if err != nil {
 		return modevents.TeamRead{}, err
 	}
-	return modevents.TeamRead{Role: got.Role, Members: got.Members, TeamLabel: got.TeamLabel}, nil
+	out := modevents.TeamRead{Role: got.Role, Members: got.Members, TeamLabel: got.TeamLabel}
+	if c := got.Compaction; c != nil {
+		out.Compaction = &modevents.TeamCompaction{Managed: c.Managed, Auto: c.Auto, Threshold: c.Threshold, Idle: c.Idle}
+	}
+	return out, nil
 }
 
 // workbookJobsKey is the workbook module's service name for the job routes (workbook.JobsKey); a string here so the
