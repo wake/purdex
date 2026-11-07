@@ -7,7 +7,7 @@ import { HostConfigConflictError, type CompactionSet } from '../../lib/host-conf
 import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { ThresholdStepper } from '../settings/ThresholdStepper'
+import { clampThreshold, ThresholdStepper } from '../settings/ThresholdStepper'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 import { HostConfigNotice, HostConfigProblemNotice, useHostConfigGate } from './HostConfigNotice'
 
@@ -22,12 +22,12 @@ export function CompactionSection({ hostId }: { hostId: string }) {
   const locked = !editable
 
   const change = useCallback((who: Who, patch: (s: CompactionSet) => CompactionSet) => {
-    setSaveError(null)
     void queueHostConfigSave(hostConfigQueueKey(hostId, 'compaction'), async () => {
       try {
         const current = useHostConfigStore.getState().byHost[hostId]?.compaction
         if (!current) return
         await useHostConfigStore.getState().saveCompaction(hostId, { ...current, [who]: patch(current[who]) })
+        setSaveError(null) // a later success clears an earlier failure's message
       } catch (err) {
         setSaveError(err instanceof HostConfigConflictError
           ? t('host_config.conflict')
@@ -53,7 +53,7 @@ export function CompactionSection({ hostId }: { hostId: string }) {
             {t('hosts.compaction.threshold')}
             <ThresholdStepper testId={`compaction-${who}-threshold`} label={`${name} ${t('hosts.compaction.threshold')}`}
               value={set.threshold} disabled={locked || !set.auto}
-              onChange={(v) => change(who, (s) => ({ ...s, threshold: v }))} />
+              onStep={(d) => change(who, (s) => ({ ...s, threshold: clampThreshold(s.threshold + d) }))} />
           </span>
           <span className="flex items-center gap-2 text-xs text-text-muted">
             {t('hosts.compaction.idle')}

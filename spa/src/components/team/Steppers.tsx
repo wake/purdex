@@ -23,10 +23,10 @@ const QUOTA_MAX = 99
 const STEP_BTN = 'w-5 h-5 inline-flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-30 disabled:pointer-events-none'
 
 /** A − / + button. When it is off for a rule (not merely busy), the reason shows on hover: the title sits on a wrapper, since a disabled button gets no hover. */
-function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; label: string; disabled: boolean; reason?: string; onClick: () => void }) {
+export function StepButton({ sign, label, disabled, reason, onClick, testId }: { sign: string; label: string; disabled: boolean; reason?: string; onClick: () => void; testId?: string }) {
   return (
     <span title={disabled ? reason : undefined} data-testid="step-reason" data-reason={disabled && reason ? reason : undefined} className="inline-flex">
-      <button type="button" aria-label={label} title={disabled ? reason : undefined} disabled={disabled} onClick={onClick} className={STEP_BTN}>{sign}</button>
+      <button type="button" data-testid={testId} aria-label={label} title={disabled ? reason : undefined} disabled={disabled} onClick={onClick} className={STEP_BTN}>{sign}</button>
     </span>
   )
 }

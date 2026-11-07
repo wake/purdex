@@ -302,29 +302,34 @@ export function parseRelay(raw: unknown, hostId: string): ParsedCollection<Relay
 
 const DEFAULT_COMPACTION_SET: CompactionSet = { auto: true, threshold: 70, idle: true }
 
-function compactionSetOf(v: unknown): CompactionSet {
-  if (!isObject(v)) return DEFAULT_COMPACTION_SET
-  const th = v.threshold
-  return {
-    auto: typeof v.auto === 'boolean' ? v.auto : true,
-    threshold: typeof th === 'number' && Number.isInteger(th) && th >= 1 && th <= 100 ? th : 70,
-    idle: typeof v.idle === 'boolean' ? v.idle : true,
-  }
+/** One set read strictly (all three fields, right types, threshold an integer 1-100), or null: what the daemon's PUT takes. */
+function compactionSetOf(v: unknown): CompactionSet | null {
+  if (!isObject(v)) return null
+  const { auto, threshold, idle } = v
+  if (typeof auto !== 'boolean' || typeof idle !== 'boolean') return null
+  if (typeof threshold !== 'number' || !Number.isInteger(threshold) || threshold < 1 || threshold > 100) return null
+  return { auto, threshold, idle }
 }
 
-/** The daemon sends the built-in defaults for a never-written or unreadable row (`invalid` marks the latter). */
+/**
+ * The daemon sends the built-in defaults for a never-written row and marks an unreadable one `invalid` (problemOf). A
+ * body that is not the strict shape is a shape problem and reads as the defaults, never a silently repaired value.
+ */
 export function parseCompaction(raw: unknown, hostId: string): ParsedCollection<CompactionDefaults> {
+  const defaults: CompactionDefaults = { solo: DEFAULT_COMPACTION_SET, team: DEFAULT_COMPACTION_SET }
   if (!isObject(raw)) {
     warn(hostId, 'compaction', 'collection is not an object; reading the defaults')
-    return { items: { solo: DEFAULT_COMPACTION_SET, team: DEFAULT_COMPACTION_SET }, revision: 0, problem: { kind: 'shape' } }
+    return { items: defaults, revision: 0, problem: { kind: 'shape' } }
   }
   const revision = revisionOf(raw, hostId, 'compaction')
   const items = isObject(raw.items) ? raw.items : {}
-  return {
-    items: { solo: compactionSetOf(items.solo), team: compactionSetOf(items.team) },
-    revision,
-    problem: problemOf(raw, hostId, 'compaction', 0),
+  const solo = compactionSetOf(items.solo)
+  const team = compactionSetOf(items.team)
+  if (!solo || !team) {
+    warn(hostId, 'compaction', 'items is not {solo, team} of {auto, threshold 1-100, idle}; reading the defaults')
+    return { items: defaults, revision, problem: { kind: 'shape' } }
   }
+  return { items: { solo, team }, revision, problem: problemOf(raw, hostId, 'compaction', 0) }
 }
 
 /** One parser per field: what a load, a PUT answer and a 409's `current` all go through. */

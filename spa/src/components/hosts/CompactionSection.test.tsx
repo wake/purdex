@@ -68,6 +68,71 @@ describe('CompactionSection', () => {
     }))
   })
 
+  // The first save is held open: the second press is queued behind it and must apply to what the first wrote.
+  function holdFirst() {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const real = saveCompaction.getMockImplementation()!
+    saveCompaction.mockImplementationOnce(async (h: string, items: CompactionDefaults) => { await gate; await real(h, items) })
+    return release
+  }
+
+  it('two quick + presses with the first PUT pending send 80', async () => {
+    seed(entry(DEFAULTS))
+    const release = holdFirst()
+    render(<CompactionSection hostId={H} />)
+    fireEvent.click(screen.getByTestId('compaction-solo-threshold-plus'))
+    fireEvent.click(screen.getByTestId('compaction-solo-threshold-plus'))
+    release()
+    await waitFor(() => expect(saveCompaction).toHaveBeenCalledTimes(2))
+    expect(saveCompaction.mock.calls[0][1].solo.threshold).toBe(75)
+    expect(saveCompaction.mock.calls[1][1].solo.threshold).toBe(80)
+  })
+
+  it('+ then − lands back on 70', async () => {
+    seed(entry(DEFAULTS))
+    const release = holdFirst()
+    render(<CompactionSection hostId={H} />)
+    fireEvent.click(screen.getByTestId('compaction-solo-threshold-plus'))
+    fireEvent.click(screen.getByTestId('compaction-solo-threshold-minus'))
+    release()
+    await waitFor(() => expect(saveCompaction).toHaveBeenCalledTimes(2))
+    expect(saveCompaction.mock.calls[1][1].solo.threshold).toBe(70)
+  })
+
+  it('a press on the other row in between keeps both rows right', async () => {
+    seed(entry(DEFAULTS))
+    const release = holdFirst()
+    render(<CompactionSection hostId={H} />)
+    fireEvent.click(screen.getByTestId('compaction-solo-threshold-plus'))
+    fireEvent.click(screen.getByTestId('compaction-team-threshold-minus'))
+    fireEvent.click(screen.getByTestId('compaction-solo-threshold-plus'))
+    release()
+    await waitFor(() => expect(saveCompaction).toHaveBeenCalledTimes(3))
+    expect(saveCompaction.mock.calls[2][1]).toEqual({
+      solo: { auto: true, threshold: 80, idle: true }, team: { auto: true, threshold: 65, idle: true },
+    })
+  })
+
+  it('an earlier failure message is gone once a later queued save succeeds', async () => {
+    seed(entry(DEFAULTS))
+    saveCompaction.mockRejectedValueOnce(new HostConfigConflictError({ items: DEFAULTS, revision: 2 }))
+    render(<CompactionSection hostId={H} />)
+    fireEvent.click(screen.getByTestId('compaction-solo-idle'))
+    fireEvent.click(screen.getByTestId('compaction-team-idle'))
+    await waitFor(() => expect(saveCompaction).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByTestId('compaction-team-idle').getAttribute('aria-checked')).toBe('false'))
+    expect(screen.queryByTestId('compaction-save-error')).toBeNull()
+  })
+
+  it('a malformed row shows the problem notice and still saves (as the relay section does)', async () => {
+    seed({ ...entry(DEFAULTS), problems: { compaction: { kind: 'shape' } } })
+    render(<CompactionSection hostId={H} />)
+    expect(screen.getByTestId('host-config-problem')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('compaction-solo-idle'))
+    await waitFor(() => expect(saveCompaction).toHaveBeenCalled())
+  })
+
   it('the stepper is disabled while auto is off', () => {
     seed(entry({ ...DEFAULTS, solo: { auto: false, threshold: 70, idle: true } }))
     render(<CompactionSection hostId={H} />)
