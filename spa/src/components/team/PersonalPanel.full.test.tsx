@@ -10,10 +10,16 @@ import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { manualGroupKey } from '../../lib/task-groups/group-key'
 import type { Tab } from '../../types/tab'
+
+vi.mock('../../lib/team/compaction-api', () => ({
+  getCompaction: () => Promise.resolve({ role: 'none', override: { auto: null, threshold: null, idle: null }, effective: { managed: true, auto: true, threshold: 70, idle: true } }),
+  putCompaction: vi.fn(),
+}))
 
 vi.mock('./TeamSeatIcon', () => ({
   TeamSeatIcon: (p: { light?: boolean }) => <span data-testid="seat-icon" data-light={String(p.light !== false)} />,
@@ -32,6 +38,7 @@ const ccTab = (id: string, agent: string, extra: Record<string, unknown> = {}): 
 const addTab = (tab: Tab) => act(() => { useTabStore.setState((s) => ({ tabs: { ...s.tabs, [tab.id]: tab }, tabOrder: [...s.tabOrder, tab.id] })) })
 const setActive = (id: string) => act(() => { useTabStore.setState({ activeTabId: id }) })
 const readRoot = (session: string, root: string) => act(() => { useRootCacheStore.getState().ingest(HOST, [{ session_id: session, root_session_id: root }]) })
+const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
 const groups = () => useManualGroupsStore.getState().groups
 const q = (id: string) => screen.getByTestId(id)
 
@@ -284,3 +291,42 @@ describe('the group list is a disclosure of buttons (codex critic)', () => {
   })
 })
 
+
+describe('the compaction row', () => {
+  const yes = () => act(() => useUnattendedStore.getState().setCompactionSupport(HOST, 'yes'))
+  const row = () => screen.queryByTestId('compaction-dev')
+  beforeEach(() => { useUnattendedStore.getState().reset() })
+
+  it('Claude Code, live, capability yes: the row is there', async () => {
+    yes()
+    scene()
+    await screen.findByTestId('compaction-dev')
+  })
+  it('capability not yes: none', async () => {
+    scene()
+    await flush()
+    expect(row()).toBeNull()
+  })
+  it('Codex: none', async () => {
+    yes()
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'x'] }], activeTabId: 'x' })
+    addTab(ccTab('cx', 'S9', { rebuild: { sessionName: 'cx', tmuxInstance: 'i', agent: { type: 'codex', sessionId: 'S9', updatedAt: 1 }, capturedAt: 1 } }))
+    setActive('cx')
+    act(() => { useTeamUiStore.getState().setSharedPanelMode('full') })
+    render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
+    expect(q('personal-settings')).toBeInTheDocument()
+    await flush()
+    expect(row()).toBeNull()
+  })
+  it('ended session: none', async () => {
+    yes()
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'x'] }], activeTabId: 'x' })
+    addTab(ccTab('cc1', 'S1', { terminated: 'tmux-restarted' }))
+    setActive('cc1')
+    act(() => { useTeamUiStore.getState().setSharedPanelMode('full') })
+    render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
+    expect(q('personal-settings')).toBeInTheDocument()
+    await flush()
+    expect(row()).toBeNull()
+  })
+})

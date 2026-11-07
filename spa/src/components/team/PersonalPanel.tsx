@@ -77,7 +77,7 @@ export function PersonalPanel({ target, mode, onSetMode }: Props) {
               <div className="border-t border-border-subtle py-1.5">
                 <PersonalCard target={target} />
               </div>
-              <PersonalSettings group={group} rootKnown={rootKnown} actions={actions} renameRequest={renameRequest} />
+              <PersonalSettings group={group} rootKnown={rootKnown} actions={actions} renameRequest={renameRequest} target={target} />
             </>
           )}
         </>
