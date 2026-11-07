@@ -8,15 +8,13 @@
 
 export const NEXT_URL = 'http://pdx/mod/v1/workbook/next'
 export const RESULT_URL = 'http://pdx/mod/v1/workbook/result'
-export const REFRESH_URL = 'http://pdx/mod/v1/workbook/refresh'
-export const CAPS = ['workbook.v2', 'workbook.refresh', 'prompt.v1'] // announced on every events batch: turn / re-write jobs, the refresh fork, and the Apps' send / interrupt
+export const CAPS = ['workbook.v2', 'prompt.v1'] // announced on every events batch: turn / re-write jobs, and the Apps' send / interrupt
 export const WAIT_MS = 15_000 // the long poll after a main turn ends
 export const REQUEST_DEADLINE_MS = 5000 // slack over the wait for a request to be answered ($.http.fetch has no timeout)
-export const REASONS = new Set(['api-error', 'empty-reply', 'aborted', 'nothing-to-fork'])
+export const REASONS = new Set(['api-error', 'empty-reply', 'aborted'])
 export const MODEL_SLACK_MS = 5000 // a call that outlives its own timeout_ms by this much is cut by the mod — and the
 // daemon's lease lasts timeout_ms + 10 s, so the abort report still has 5 s to arrive before the lease runs out
 export const DEFAULT_TIMEOUT_MS = 30_000 // the deadline of a job that names none
-export const DEFAULT_FORK_TIMEOUT_MS = 90_000 // the deadline of a fork job that names none (the daemon names 90 s)
 export const MAX_JOBS_PER_DRAIN = 8 // jobs one run of the loop takes before it stops and waits for the next trigger
 
 // Bounds on a job from the daemon (fail closed: a job outside them is answered `refused`, the model is not called).
@@ -25,7 +23,6 @@ const MAX_TEXT = 200_000 // characters of the prompt, and of each system block
 const MAX_BLOCKS = 8
 const MAX_TOKENS = 4096 // the daemon's contract; 4096 tokens is far below the 64 KiB the result route takes as text
 const MAX_TIMEOUT_MS = 120_000
-const MAX_FORK_TIMEOUT_MS = 300_000 // a fork sends the whole conversation
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -76,31 +73,6 @@ export function completeRequest(c) {
     req.timeoutMs = c.timeout_ms
   }
   return req
-}
-
-// forkRequest reads a refresh job's `fork` ({prompt, timeout_ms}): the request of $.model.fork (just the prompt — the fork
-// sends the conversation itself) and the deadline the mod keeps. Null when the job has nothing this mod will run.
-export function forkRequest(f) {
-  if (!isObject(f) || typeof f.prompt !== 'string' || !f.prompt || f.prompt.length > MAX_TEXT) return null
-  if (f.timeout_ms !== undefined && (!Number.isInteger(f.timeout_ms) || f.timeout_ms < 1000 || f.timeout_ms > MAX_FORK_TIMEOUT_MS)) return null
-  return { req: { prompt: f.prompt }, timeoutMs: f.timeout_ms ?? DEFAULT_FORK_TIMEOUT_MS }
-}
-
-// refreshBody is the request of the daemon's refresh route (the /workbook refresh command).
-export function refreshBody(stream, sessionId) {
-  return JSON.stringify({ stream, session_id: sessionId })
-}
-
-// refreshNotice turns the daemon's answer to a refresh request into the one line the person sees, and says whether the job
-// was queued (then the mod asks `next` at once).
-export function refreshNotice(res) {
-  if (!res) return { queued: false, text: '工作簿重整：沒有連上 daemon，沒有排入。' }
-  let code = ''
-  try { code = String(JSON.parse(res.text)?.error ?? '') } catch {}
-  if (res.status === 202) return { queued: true, text: '工作簿重整：已排入，稍後會更新「目前狀況」與待辦。' }
-  if (res.status === 409 && code === 'refresh_pending') return { queued: false, text: '工作簿重整：上一次重整還在進行，請稍後。' }
-  if (res.status === 409) return { queued: false, text: '工作簿重整：目前沒有可執行重整的 session（daemon 或這個 mod 還不支援）。' }
-  return { queued: false, text: '工作簿重整：失敗（daemon 回應 ' + res.status + '）。' }
 }
 
 // usageOf maps the API's usage to the daemon's.
