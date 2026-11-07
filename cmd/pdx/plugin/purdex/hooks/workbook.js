@@ -193,6 +193,7 @@ export function promptResultBody(stream, jobId, status, reason, extra) {
 export const COMPACT_CONTEXT_URL = 'http://pdx/mod/v1/dialogue/compact-context'
 export const COMPACT_CONTEXT_WAIT_MS = 30_000 // the daemon waits up to about 28 s for the recap to end
 export const COMPACT_APPEND_DELAY_MS = 1000 // a row appended sooner than this after the hook returned can be lost to the compaction
+export const COMPACT_HOLD_MAX_MS = 60_000 // a prompt waits at most this long for the compact context (spec §6.5)
 
 export function compactContextBody(stream, sessionId) {
   return JSON.stringify({ stream, session_id: sessionId })

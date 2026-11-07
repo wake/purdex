@@ -25,14 +25,15 @@
 //   register.js owns are observed below by hooks of this file's own, with a matcher.
 // - M-U1-3: an event may be registered without a matcher once per plugin. register.js owns
 //   `session.start`, `turn.start`, `turn.complete`, `classic.SessionStart`, `prompt.submit`
-//   and `session.compact` unmatched; here those carry a matcher (one with and one without
+//   and `session.compact` unmatched; here those carry a matcher (this file registers `prompt.submit` too, to hold
+//   a prompt until the compact context is in) (one with and one without
 //   load, the first registered outermost — registerEvents runs before register.js's own, so
 //   these wrap the relay's), and only `tool.call`, `tool.check`, `agent.spawn`,
 //   `session.measure`, `session.end` and `classic.Stop` are unmatched. `ui.render` carries
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, COMPACT_APPEND_DELAY_MS, COMPACT_CONTEXT_URL, COMPACT_CONTEXT_WAIT_MS, compactContextBody, parseCompactContext, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, COMPACT_APPEND_DELAY_MS, COMPACT_HOLD_MAX_MS, COMPACT_CONTEXT_URL, COMPACT_CONTEXT_WAIT_MS, compactContextBody, parseCompactContext, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -47,6 +48,8 @@ const STREAM_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 const MONITORS_MAX = 64 // monitor ids kept at once; one more drops the oldest
 const ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']) // tools that wait on the person by themselves
 const TIMEOUT = Symbol('timeout')
+const HOLD_SLEEP = ['/bin/sleep', '5'] // the compact hold's own `$` call: local, it asks the daemon nothing
+const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const TEAM_URL = 'http://pdx/mod/v1/team' // GET ?session_id=<sid> on the same socket (TI-5a)
 const TEAM_MS = 15_000 // how often the lead's member count is read
 
@@ -513,8 +516,10 @@ async function clearIfOurs($, own) {
 // A submit goes only while no turn runs: $.prompt.submit does not refuse mid-turn, it blocks until the session is idle, so a
 // turn in progress is reported `busy` at once and the App sends again when it is idle. The text goes in as the person's own
 // words (asUser), which is also how the transcript shows it.
+// A submit while the compact context is pending is reported busy too: a prompt sent before the recap is appended would
+// sit in front of it (spec §4.3).
 async function pqSubmit($, job) {
-  if (ev.turnId) return pqOut('busy')
+  if (ev.turnId || compactHoldOpen()) return pqOut('busy')
   const r = await $.prompt.submit({ text: job.text, asUser: true })
   if (isObject(r) && typeof r.drop === 'string') return pqOut('dropped', r.drop || 'dropped')
   return pqOut('accepted')
@@ -653,6 +658,7 @@ async function startReporter($, e) {
   stopBeat()
   stopTeam()
   wb.gen += 1
+  compactHoldDrop()
   ev.on = false
   ev.switching = false
   const cfg = parse(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
@@ -693,6 +699,7 @@ async function sessionSwitch($, source) {
     const prev = ev.sid
     ev.sid = String(await $.session.id())
     wb.gen += 1 // a poll made under the old session id stops asking
+    compactHoldDrop()
     ev.turnId = ''
     ev.asks.clear()
     ev.compacting = false
@@ -723,6 +730,7 @@ async function sessionEnd($, e) {
     stopBeat()
     stopTeam()
     wb.gen += 1
+    compactHoldDrop()
   }
   enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
   await finalFlush($)
@@ -926,13 +934,27 @@ async function onSessionSwitch($, e, next) {
 // ---- the compact context: the recap goes into the conversation after a compaction (spec §4) ----
 // The hook never waits for the daemon: the compaction (5-18 s) and the recap (about 4 s) run at once. The text is put in
 // as a meta row COMPACT_APPEND_DELAY_MS after the hook returned (an earlier row can be lost to the compaction's boundary).
+// A prompt typed meanwhile would start its turn before the row lands, and the model would take the person's words for part
+// of the record. So onPromptHold holds `prompt.submit` from the moment a compaction starts (main conversation, reporter on)
+// until each started compaction is released: the row appended (or refused, or thrown), known not to come (daemon 204, error,
+// timeout), the compaction skipped or failed, the session id changed, or a newer compaction finished (the older row is not
+// appended). It lets go at once on Escape, a failed sleep, or COMPACT_HOLD_MAX_MS. Every failure lets the prompt go unchanged.
+
+// compactHold is the compaction that started last; a prompt waits while it is not done.
+let compactHold = null
+const compactHoldOpen = () => !!compactHold && !compactHold.done
+function compactHoldDrop() { if (compactHoldOpen()) compactHold.release() } // the session moved on: the old row is never appended
 
 // compactInjectStart: only the main conversation's own compaction; returns the job, or null.
 function compactInjectStart($, e) {
   if (e.agentId || e.trigger === 'precompute') return null
   let settle = () => {}
   const text = new Promise((resolve) => { settle = resolve })
-  const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, text, settle }
+  let release = () => {}
+  const held = new Promise((resolve) => { release = () => { job.done = true; resolve() } })
+  const job = { gen: wb.gen, stream: ev.stream, sid: ev.sid, text, settle, held, release, done: false }
+  compactHold = job
+  text.then((t) => { if (!t) job.release() })
   $.clock.after(0, () => compactFetchTick($, job))
   return job
 }
@@ -964,7 +986,7 @@ function compactInjectLater($, job) {
 }
 
 function compactAppendTick($, job) {
-  void compactAppend($, job).catch((err) => log($, 'compact context append failed: ' + String(err)))
+  void compactAppend($, job).catch((err) => log($, 'compact context append failed: ' + String(err))).finally(() => job.release())
 }
 
 async function compactAppend($, job) {
@@ -988,7 +1010,45 @@ async function onCompact($, e, next) {
   } finally {
     compactEnded($, e, ok)
     if (ok && job) compactInjectLater($, job)
+    else if (job) job.release()
   }
+}
+
+const HOLD_TICK = Symbol('tick')
+
+// holdUntil waits for `target` (a promise) at most `ms`, racing it with a local `/bin/sleep 5` of the hook's own, again while
+// the target is out: a `$` call in flight stops the hook's 10 s budget. Same as register.js's sleepUntil, which cannot be
+// imported (M-U1-2: `$` is followed only into this file's own top-level functions). Says why it ended: 'settled', 'abandoned'
+// (Escape), 'deadline', or 'failed' (a sleep that rejects or fails would come back at once: fail open, never spin).
+async function holdUntil($, target, ms, signal) {
+  const settled = target.then(() => 'settled')
+  const abandoned = new Promise((resolve) => {
+    if (!signal) return
+    if (signal.aborted) return resolve('abandoned')
+    signal.addEventListener('abort', () => resolve('abandoned'), { once: true })
+  })
+  const deadline = (await $.clock.now()) + ms
+  for (;;) {
+    const tick = $.process.run(HOLD_SLEEP, { timeoutMs: HOLD_SLEEP_TIMEOUT_MS }).then((r) => (r.exitCode === 0 ? HOLD_TICK : 'failed'), () => 'failed')
+    const r = await Promise.race([settled, abandoned, tick])
+    if (r !== HOLD_TICK) return r
+    if ((await $.clock.now()) >= deadline) return 'deadline'
+  }
+}
+
+// onPromptHold: a prompt goes on only when no compaction is waiting for its recap row (the newest one, again, if another
+// started meanwhile). The text is never touched.
+async function onPromptHold($, e, next) {
+  if (!ev.on || !compactHoldOpen()) return next(e)
+  const begun = await $.clock.now()
+  const deadline = begun + COMPACT_HOLD_MAX_MS
+  let why = 'settled'
+  while (compactHoldOpen()) {
+    why = await holdUntil($, compactHold.held, deadline - (await $.clock.now()), next.signal)
+    if (why !== 'settled') break
+  }
+  log($, 'prompt held ' + String((await $.clock.now()) - begun) + ' ms for the compact context: ' + why)
+  return next(e)
 }
 
 // onToolCall reports tool.start before next(e) and tool.end after it, timed on the engine's
@@ -1067,6 +1127,11 @@ export function registerEvents(on) {
   on('turn.complete', { turnId: /^/ }, onTurnComplete).catch(($, e, next) => next(e))
   on('classic.SessionStart', { source: ['clear', 'resume'] }, onSessionSwitch).catch(($, e, next) => next(e))
   on('session.compact', { trigger: /^/ }, onCompact).catch(($, e, next) => next(e))
+  on('prompt.submit', { text: /^/ }, onPromptHold).catch(($, e, next) => {
+    // The engine hands a failure of register.js's own prompt hold (beneath this one) to this outermost catch too.
+    log($, 'prompt hold failed (' + (next.error ? next.error.kind : '?') + '); the prompt goes on unchanged')
+    return next(e)
+  })
   on('tool.call', onToolCall).catch(($, e, next) => next(e))
   on('tool.check', onToolCheck).catch(($, e, next) => next(e))
   on('agent.spawn', onAgentSpawn).catch(($, e, next) => next(e))
