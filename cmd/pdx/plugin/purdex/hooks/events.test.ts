@@ -2750,3 +2750,72 @@ test('a failed team read keeps the previous policy', async ($, on) => {
   await endTurn($, w, 't1')
   expect(w.compactCalls.length).toBe(1)
 })
+
+// ---- compaction control: idle compaction off, and a plugin compaction reported as manual (PR 3, Task 8) ----
+
+const idleWorld = (on: any, policy: any = POLICY({ idle: false }), opts: Partial<W> = {}) => autoWorld(on, { team: () => teamAnswer('none', 0, '', policy), usage: () => USAGE_AT(1000, 1), ...opts })
+
+test('idle off skips an idle compaction and a precompute', async ($, on) => {
+  const w = idleWorld(on)
+  await start($, w)
+  for (const trigger of ['auto', 'precompute']) {
+    const before = w.compactCalls.length
+    const r: any = await compactOf($, trigger)
+    expect(typeof r.skip).toBe('string')
+    expect(w.compactCalls.length).toBe(before)
+  }
+})
+
+test('idle on lets an idle compaction run', async ($, on) => {
+  const w = idleWorld(on, POLICY({ idle: true }))
+  await start($, w)
+  await compactOf($, 'auto')
+  expect(w.compactCalls).toEqual(['auto'])
+})
+
+test('a compaction inside a turn is never skipped, idle off or not', async ($, on) => {
+  const w = idleWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  const r: any = await compactOf($, 'auto')
+  expect(r.skip).toBeUndefined()
+  expect(w.compactCalls).toEqual(['auto'])
+})
+
+test('a manual compaction is never skipped', async ($, on) => {
+  const w = idleWorld(on)
+  await start($, w)
+  const r: any = await compactOf($, 'manual')
+  expect(r.skip).toBeUndefined()
+  expect(w.compactCalls).toEqual(['manual'])
+})
+
+test('a member’s own intercept comes first', async ($, on) => {
+  const w = idleWorld(on, POLICY({ idle: false }), { pdx: pdxHello(JSON.stringify({ ok: true, role: 'member', self_relay: 'on', threshold: 70, min_growth: 20000, idle_intercept: 1 })) })
+  await start($, w)
+  const r: any = await compactOf($, 'auto')
+  expect(r.skip).toBe('member 閒置：已通知 lead 決定')
+})
+
+for (const [name, team] of [
+  ['unmanaged', teamAnswer('none', 0, '', POLICY({ managed: false, idle: false }))],
+  ['unknown', { status: 500, text: '{}' }],
+] as [string, Answer][]) {
+  test(name + ' settings skip nothing', async ($, on) => {
+    const w = idleWorld(on, undefined, { team: () => team })
+    await start($, w)
+    const r: any = await compactOf($, 'auto')
+    expect(r.skip).toBeUndefined()
+    expect(w.compactCalls).toEqual(['auto'])
+  })
+}
+
+test('a plugin compaction is reported as manual', async ($, on) => {
+  const argvs: string[][] = []
+  const w = idleWorld(on, POLICY({ idle: true }), { pdx: (argv) => { argvs.push(argv); return pdxHello()(argv) } })
+  await start($, w)
+  await compactOf($, 'plugin')
+  await w.clock.settle()
+  const rep = argvs.find((a) => a[0] === 'relay' && a[1] === 'compacted')
+  expect(rep?.slice(0, 6)).toEqual(['relay', 'compacted', '--session', expect.any(String), '--trigger', 'manual'])
+})

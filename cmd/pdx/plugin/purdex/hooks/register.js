@@ -100,6 +100,7 @@ const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
 const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
 const RELAY_MEMBER = 'member 的接力由 lead 安排'
 const SKIP_MEMBER_IDLE = 'member 閒置：已通知 lead 決定'
+const SKIP_IDLE_OFF = '設定已關閉閒置壓縮'
 const STATUS_HALF = '已寫好接力檔'
 const toastHalf = (path) => '快取即將過期，已先寫好接力檔（' + path + '）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
@@ -724,6 +725,7 @@ async function maybeBegin($) {
     return
   }
   if (s.pausedLatch) return // the daemon paused this session: the +10 % gate alone would ask again, the latch does not
+  // the policy can lag up to 15 s after self relay is switched on, so one compaction may still happen in that window; the next team read corrects it
   if (compactionPolicy()?.managed) return // managed = self relay is not on: the daemon would only refuse the begin, and the turn end's auto compaction needs the state idle
   if (!hasCSPRNG()) {
     if (!s.noCSPRNGLogged) {
@@ -1705,6 +1707,7 @@ function interceptedLater($) {
 }
 
 function compactedLater($, trigger) {
+  if (trigger === 'plugin') trigger = 'manual' // the mod's own compaction is told to the daemon as a manual one
   if (trigger !== 'auto' && trigger !== 'manual' && trigger !== 'idle') return
   later($, 0, async () => {
     const sid = await $.session.id()
@@ -2194,6 +2197,9 @@ export function register(on) {
   // wait` exits 12, which releases the held prompts. No .catch: a hook that
   // throws here lets the compaction run.
   on('session.compact', async ($, e, next) => {
+    // idle compaction off in the settings (managed policy): Claude Code's idle compaction and its precompute are vetoed; inside a turn, manual and plugin never
+    const idleOff = s.interactive && !e.agentId && compactionPolicy()?.managed && compactionPolicy().idle === false
+    if (idleOff && e.trigger === 'precompute') return { skip: SKIP_IDLE_OFF }
     if (!s.interactive || e.agentId || e.trigger === 'precompute') return next(e)
     disarmIdle()
     // Claude Code's idle compaction runs between turns; a context-full auto compaction runs inside one (spec §4.5). Only
@@ -2206,6 +2212,7 @@ export function register(on) {
       interceptedLater($)
       return { skip: SKIP_MEMBER_IDLE }
     }
+    if (idleOff && e.trigger === 'auto' && !s.turnRunning) return { skip: SKIP_IDLE_OFF }
     if (s.state === 'approved') {
       if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
       return compactedAfter($, e, await next(e), trigger)
