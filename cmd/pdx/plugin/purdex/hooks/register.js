@@ -1533,7 +1533,7 @@ async function maybeAutoCompact($, e) {
   if (s.compactFloor !== undefined && !(u.tokens >= s.compactFloor + COMPACT_FLOOR_GROWTH)) return
   s.compactBusy = true
   const tokens = u.tokens
-  const at = { gen: s.gen, epoch: s.compactEpoch }
+  const at = { gen: s.gen, epoch: s.compactEpoch, percent: u.percent }
   $.clock.after(0, () => { void autoCompactTick($, tokens, at) })
 }
 
@@ -1545,7 +1545,7 @@ function autoCompactTick($, tokens, at) {
 async function autoCompact($, tokens, at) {
   try {
     const p = compactionPolicy()
-    if (!p || !p.managed || !p.auto) return // a team read changed the policy meanwhile
+    if (!p || !p.managed || !p.auto || at.percent < p.threshold) return // a team read changed the policy (or raised the threshold) meanwhile
     if (s.gen !== at.gen || s.compactEpoch !== at.epoch || s.compactFloorPending) return // a /clear or another compaction came first
     if (s.state !== 'idle' || s.turnRunning) return // a turn that started meanwhile: the engine would refuse, and the next turn end asks again
     const r = await $.session.compact({})

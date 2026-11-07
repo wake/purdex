@@ -2890,3 +2890,16 @@ test('a new session before the timer runs stops the compaction (the generation m
   await w.clock.settle()
   expect(w.compactCalls.length).toBe(0)
 })
+
+test('a threshold raised before the timer runs stops the compaction', async ($, on) => {
+  let pol = POLICY()
+  let flip = false
+  const w = autoWorld(on, { team: () => teamAnswer('none', 0, '', pol), usage: async () => { if (flip) { flip = false; pol = POLICY({ threshold: 80 }); await w.clock.advance(1); await w.clock.settle() } return USAGE_AT(144000, 72) } })
+  await start($, w)
+  await w.clock.advance(14_999)
+  await turnStart($, 't1')
+  flip = true
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+})
