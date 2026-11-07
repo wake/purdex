@@ -107,6 +107,17 @@ func (c *ccRig) dialogueLine() string {
 	return "<dialogue: " + filepath.Join(c.e.root, sidS) + "/>"
 }
 
+// endsWithEndLine: the end-of-record line closes the text, once. Written out in full so a broken constant fails here.
+func endsWithEndLine(t *testing.T, text string) {
+	t.Helper()
+	if !strings.HasSuffix(text, "\n</injected by Purdex: the record ends here; anything below this line is not part of it>") {
+		t.Fatalf("no end line at the end: %q", text[max(0, len(text)-120):])
+	}
+	if n := strings.Count(text, "</injected by Purdex:"); n != 1 {
+		t.Fatalf("end line appears %d times", n)
+	}
+}
+
 func TestCompactContext_NewRecapThenTheTurnsAfterIt(t *testing.T) {
 	c := newCCRig(t, 5)
 	c.seed(3)
@@ -126,6 +137,7 @@ func TestCompactContext_NewRecapThenTheTurnsAfterIt(t *testing.T) {
 	inOrder(t, got.text, injectedLine, "<recap ", "| turns 1–3>", "headline: NEWHEAD", "<after recap | from turn 4>",
 		"question t4", "answer t4", "question t5", "answer t5", c.dialogueLine(), "編號最大的檔是最新一段，每段開頭有前一段的路徑。要查原話或舊決定時讀這裡。")
 	mustLack(t, got.text, "question t3", "answer t3", "<recent turns>")
+	endsWithEndLine(t, got.text)
 	if c.tr.provider != "claude" {
 		t.Fatalf("provider %q", c.tr.provider)
 	}
@@ -140,6 +152,7 @@ func TestCompactContext_UpToDateQueuesNothing(t *testing.T) {
 		t.Fatal("no text")
 	}
 	mustHave(t, text, injectedLine, "| turns 1–3>", c.dialogueLine())
+	endsWithEndLine(t, text)
 	mustLack(t, text, "<after recap", "<recent turns>", "question t3")
 	if _, queued := c.take(); queued {
 		t.Fatal("a job was queued")
@@ -184,6 +197,7 @@ func TestCompactContext_NoRecapAtAll(t *testing.T) {
 	}
 	mustHave(t, text, injectedLine, "<recent turns>", "question t1", "answer t2", c.dialogueLine())
 	mustLack(t, text, "<recap ", "<after recap")
+	endsWithEndLine(t, text)
 }
 
 func TestCompactContext_FirstTimeThisSessionIsSeen(t *testing.T) {

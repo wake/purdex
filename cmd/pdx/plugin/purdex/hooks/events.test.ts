@@ -7,7 +7,7 @@
 // Every POST goes out from a $.clock.after timer, so each step settles or advances the mocked
 // clock before it looks at what was posted.
 import { test, expect, mock } from 'claude-code/testing'
-import { fillRefusal, parsePromptJob } from './workbook.js'
+import { COMPACT_CONTEXT_WAIT_MS, REQUEST_DEADLINE_MS, fillRefusal, parsePromptJob } from './workbook.js'
 
 const SID1 = 'aaaaaaaa-1111-4111-8111-111111111111'
 const SID2 = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -57,7 +57,12 @@ type W = {
   ctxReqs: any[] // the POSTs to dialogue/compact-context, never mixed with the event batches
   compactContext: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to it (default 204)
   appends: any[] // session.append calls beneath the mod
-  append?: (e: any) => any // overrides the answer to session.append (default: the row is written)
+  append?: (e: any, next: (e: any) => any) => any // overrides the answer to session.append (default: the row is written)
+  // The compact-context hold's local `/bin/sleep` calls, kept apart from the pdx calls; by default one sleeps its seconds on the
+  // mocked clock and exits 0, `sleep` overrides how it ends.
+  sleeps: { argv: string[]; timeoutMs?: number }[]
+  order: string[] // 'submit' (prompt.submit beneath the mod) and 'append' (session.append beneath), as they happened
+  sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
 }
 
 const teamAnswer = (role: string, members = 0, label = ''): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label }) })
@@ -74,7 +79,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     model: () => ({ isAnswered: true, text: '{}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }), modelCalls: [],
     registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
     submit: (e: any) => ({ text: e.text }), submitCalls: [], composer: '', readCalls: [], fillCalls: [], abort: () => undefined, abortCalls: [],
-    ctxReqs: [], compactContext: () => ({ status: 204 }), appends: [],
+    ctxReqs: [], compactContext: () => ({ status: 204 }), appends: [], sleeps: [], order: [],
     daemon: ackAll,
     bash: () => BASH_OK,
     compact: (e: any) => ({ messages: e.messages }),
@@ -133,6 +138,11 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     return { deny: 'ENOENT' }
   })
   on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] === '/bin/sleep') {
+      w.sleeps.push({ argv: [...e.argv], timeoutMs: e.init?.timeoutMs })
+      const s = await (w.sleep ? w.sleep([...e.argv]) : w.clock.sleep(Number(e.argv[1]) * 1000).then(() => ({ exitCode: 0 })))
+      return { value: { exitCode: s.exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const r = await w.pdx([...e.argv].slice(1))
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -143,6 +153,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   })
   on('prompt.submit', async (_$: any, e: any) => {
     w.submitCalls.push(e)
+    w.order.push('submit')
     const r = await w.submit(e, w.submitCalls.length)
     return r
   })
@@ -164,7 +175,8 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   })
   on('session.append', async (_$: any, e: any, next: any) => { // only the message is kept: the engine adds role, isMeta, uuid
     w.appends.push({ message: { type: e.message.type, content: e.message.content } })
-    return w.append ? w.append(e) : next(e)
+    w.order.push('append')
+    return w.append ? w.append(e, next) : next(e)
   })
   on('command.register', async (_$: any, e: any) => { w.registered.push(e.name); return { value: { command: e.name } } })
   on('ui.log', async (_$: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
@@ -1650,6 +1662,326 @@ test('the /workbook command is no longer registered', async ($, on) => {
   await start($, w)
   expect(w.registered).not.toContain('workbook')
 })
+
+// ---- the compact context: a prompt typed meanwhile waits for the recap (compaction control, spec §4.3, §6.5) ----
+
+const typed = ($: any, text: string) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
+// A compaction beneath that ends only when go() is called.
+const cgate = () => {
+  let go: () => void = () => {}
+  const p = new Promise<any>((r) => { go = () => r({ messages: CMSGS }) })
+  return { go, p }
+}
+const ONE_SLEEP_MS = 5000
+
+test('a prompt typed while the compaction runs goes on after the recap is appended, unchanged', async ($, on) => {
+  const g = cgate()
+  const w = evWorld(on, { compact: () => g.p, compactContext: () => CTX_OK('RECAP') })
+  await start($, w)
+  const c = compactOf($)
+  void typed($, 'my words')
+  await w.clock.advance(100)
+  expect(w.submitCalls).toEqual([])
+  g.go()
+  await c
+  await w.clock.advance(999)
+  expect(w.submitCalls).toEqual([])
+  await w.clock.advance(1)
+  await w.clock.settle()
+  expect(w.order).toEqual(['append', 'submit'])
+  expect(w.submitCalls[0].text).toBe('my words')
+  expect(w.appends).toEqual([APPENDED('RECAP')])
+})
+
+test('with no compaction open a prompt goes on at once and sleeps nothing', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK() })
+  await start($, w)
+  void typed($, 'a')
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  expect(w.sleeps).toEqual([])
+  await compactOf($)
+  await w.clock.advance(1000)
+  expect(w.appends.length).toBe(1)
+  void typed($, 'b')
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(2)
+  expect(w.sleeps).toEqual([])
+})
+
+test('a compaction skipped beneath lets a held prompt go at once', async ($, on) => {
+  const g = cgate()
+  const w = evWorld(on, { compact: () => g.p.then(() => ({ skip: 'no' })), compactContext: () => CTX_OK() })
+  await start($, w)
+  const c = compactOf($)
+  void typed($, 'q')
+  await w.clock.settle()
+  expect(w.submitCalls).toEqual([])
+  g.go()
+  await c
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  expect(w.appends).toEqual([])
+})
+
+test('a member’s idle compaction stopped by the relay holds nothing', async ($, on) => {
+  const hello = JSON.stringify({ ok: true, role: 'member', self_relay: 'on', threshold: 70, min_growth: 20000, idle_intercept: 1 })
+  const w = evWorld(on, { compactContext: () => CTX_OK(), pdx: (argv) => (argv[0] === 'relay' && argv[1] === 'hello' ? { exitCode: 0, stdout: hello } : { exitCode: 0, stdout: '{}' }) })
+  await start($, w)
+  expect((await compactOf($, 'auto')).skip).toBeDefined()
+  void typed($, 'q')
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  expect(w.sleeps).toEqual([])
+})
+
+test('an empty answer lets a held prompt go as soon as it is in', async ($, on) => {
+  const g = cgate()
+  let open!: () => void
+  const door = new Promise<Answer>((r) => { open = () => r({ status: 204 }) })
+  const w = evWorld(on, { compact: () => g.p, compactContext: () => door })
+  await start($, w)
+  const c = compactOf($)
+  void typed($, 'q')
+  await w.clock.settle()
+  expect(w.submitCalls).toEqual([])
+  open()
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  g.go()
+  await c
+})
+
+test('an append that never answers holds the prompt at most 60 s', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK(), append: () => never() })
+  await start($, w)
+  await compactOf($)
+  void typed($, 'q')
+  await w.clock.advance(59_000)
+  expect(w.submitCalls).toEqual([])
+  await w.clock.advance(1000 + ONE_SLEEP_MS)
+  expect(w.submitCalls.length).toBe(1)
+  expect(w.logs.some((l) => l.includes('prompt held'))).toBe(true) // ends by the job's own 60 s or the prompt's, whichever fires first
+})
+
+test('a hold that expires frees the job: a later prompt goes on at once', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => CTX_OK(), append: () => never() })
+  await start($, w)
+  await compactOf($)
+  void typed($, 'A')
+  await w.clock.advance(60_000 + ONE_SLEEP_MS)
+  expect(w.submitCalls.length).toBe(1)
+  const n = w.sleeps.length
+  void typed($, 'B')
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(2)
+  expect(w.sleeps.length).toBe(n)
+})
+
+test('after the hold expires an App submit is accepted', async ($, on) => {
+  // the standing poll cannot sit out 65 s of mocked time, so it answers 204 until the job is ready
+  let ready = false
+  let given = false
+  const promptNext = (): Answer => (ready && !given ? ((given = true), { status: 200, text: JSON.stringify({ job: PJOB() }) }) : { status: 204 })
+  const w = evWorld(on, { promptNext, compactContext: () => CTX_OK(), append: () => never() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(60_000 + ONE_SLEEP_MS)
+  expect(w.submitCalls).toEqual([])
+  ready = true
+  await w.clock.advance(60_000)
+  expect(pqResult(w)[0].body.status).toBe('accepted')
+  expect(w.submitCalls.length).toBe(1)
+})
+
+test('a daemon that never answers lets the prompt go when the request gives up', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => never() })
+  await start($, w)
+  await compactOf($)
+  void typed($, 'q')
+  const giveUp = COMPACT_CONTEXT_WAIT_MS + REQUEST_DEADLINE_MS
+  await w.clock.advance(giveUp - 1000)
+  expect(w.submitCalls).toEqual([])
+  await w.clock.advance(1000 + ONE_SLEEP_MS)
+  expect(w.submitCalls.length).toBe(1)
+  expect(w.appends).toEqual([])
+})
+
+test('a session that moved on lets a held prompt go at once', async ($, on) => {
+  const w = evWorld(on, { compactContext: () => never() })
+  await start($, w)
+  await compactOf($)
+  void typed($, 'q')
+  await w.clock.settle()
+  expect(w.submitCalls).toEqual([])
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  expect(w.appends).toEqual([])
+})
+
+for (const [name, holdMs] of [['a short hold', 100], ['a long hold', 20_000]] as [string, number][]) {
+  test(`an App submit during ${name} is submitted after the recap is appended, and accepted`, async ($, on) => {
+    const g = gated(PJOB())
+    const c = cgate()
+    const w = evWorld(on, { promptNext: g.fn, compact: () => c.p, compactContext: () => CTX_OK() })
+    await start($, w)
+    const c0 = compactOf($)
+    g.open()
+    await w.clock.advance(holdMs)
+    expect(w.submitCalls).toEqual([])
+    expect(pqResult(w)).toEqual([])
+    c.go()
+    await c0
+    await w.clock.advance(1000)
+    await w.clock.settle()
+    expect(w.order).toEqual(['append', 'submit'])
+    if (holdMs < 1000) expect(pqResult(w)[0].body.status).toBe('accepted') // the long one may run past the daemon's lease
+  })
+}
+
+test('a prompt waits for the append of a compaction that takes longer than 60 s', async ($, on) => {
+  const g = cgate()
+  const w = evWorld(on, { compact: () => g.p, compactContext: () => CTX_OK('RECAP') })
+  await start($, w)
+  const c = compactOf($)
+  await w.clock.advance(59_000)
+  void typed($, 'q') // the engine runs prompt.submit when the compaction has ended; this one is typed just before
+  await w.clock.advance(2000) // the compaction runs 61 s: no timer on the hold while it does
+  expect(w.submitCalls).toEqual([])
+  g.go()
+  await c
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.order).toEqual(['append', 'submit'])
+})
+
+test('a held prompt is never kept past its own 60 s by a newer compaction', async ($, on) => {
+  const g1 = cgate()
+  const g2 = cgate()
+  let n = 0
+  const w = evWorld(on, { compact: () => (n++ === 0 ? g1.p : g2.p), compactContext: (_b, k) => CTX_OK('R' + k) })
+  await start($, w)
+  const c1 = compactOf($)
+  g1.go()
+  await c1
+  void typed($, 'q')
+  await w.clock.advance(500)
+  const c2 = compactOf($) // the newer compaction outlives the prompt's deadline
+  await w.clock.advance(500) // R1 is appended, the hold turns to the newer job
+  expect(w.appends).toEqual([APPENDED('R1')])
+  await w.clock.advance(58_999)
+  expect(w.submitCalls).toEqual([])
+  await w.clock.advance(1)
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  g2.go()
+  await c2
+})
+
+test('once the recap is in an App submit is accepted', async ($, on) => {
+  const g = gated(PJOB())
+  const w = evWorld(on, { promptNext: g.fn, compactContext: () => CTX_OK() })
+  await start($, w)
+  await compactOf($)
+  await w.clock.advance(1000)
+  g.open()
+  await w.clock.settle()
+  expect(pqResult(w)[0].body.status).toBe('accepted')
+  expect(w.submitCalls.length).toBe(1)
+})
+
+test('with the reporter off nothing is held', async ($, on) => {
+  const g = cgate()
+  const w = evWorld(on, { pdxJSON: PDX_JSON_OLD, compact: () => g.p, compactContext: () => CTX_OK() })
+  await start($, w)
+  const c = compactOf($)
+  void typed($, 'q')
+  await w.clock.settle()
+  expect(w.submitCalls.length).toBe(1)
+  g.go()
+  await c
+})
+
+// Real time: the engine cuts a hook that awaits a plain promise at 10 s; only `$` calls in flight (the local sleeps) keep it.
+test('the hold outlives the 10 s hook budget on its local sleeps', { timeoutMs: 30_000 }, async ($, on) => {
+  // The compaction and the append beneath are hooks with their own 10 s budget, so each waits 9 s on a bare timer: the hold
+  // (18 s in all) outlives the budget only on its own local sleeps.
+  const later = (v: any) => new Promise((r) => setTimeout(() => r(v), 9000))
+  const w = evWorld(on, {
+    sleep: (argv) => new Promise((r) => setTimeout(() => r({ exitCode: 0 }), Number(argv[1]) * 1000)),
+    compact: () => later({ messages: CMSGS }), compactContext: () => CTX_OK(), append: async (e, next) => { await later(0); return next(e) },
+  })
+  await start($, w)
+  const c = compactOf($)
+  const p = typed($, 'q')
+  await c
+  await w.clock.advance(1000) // the append starts and answers 9 s of real time later
+  await p
+  expect(w.order).toEqual(['append', 'submit'])
+  expect(w.submitCalls[0].text).toBe('q')
+  expect(w.sleeps.length).toBeGreaterThanOrEqual(3)
+})
+
+test('a prompt held over two compactions goes on after the second recap', async ($, on) => {
+  const g1 = cgate()
+  const g2 = cgate()
+  let n = 0
+  const w = evWorld(on, { compact: () => (n++ === 0 ? g1.p : g2.p), compactContext: (_b, k) => CTX_OK('R' + k) })
+  await start($, w)
+  const c1 = compactOf($)
+  void typed($, 'q')
+  g1.go()
+  await c1
+  await w.clock.advance(500)
+  const c2 = compactOf($) // starts before the first recap is in
+  await w.clock.advance(500)
+  expect(w.appends).toEqual([APPENDED('R1')])
+  expect(w.submitCalls).toEqual([])
+  g2.go()
+  await c2
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.order).toEqual(['append', 'append', 'submit'])
+  expect(w.appends[1]).toEqual(APPENDED('R2'))
+  expect(w.submitCalls.length).toBe(1)
+})
+
+for (const [name, sleep] of [
+  ['fails', () => ({ exitCode: 1 })],
+  ['rejects', () => Promise.reject(new Error('no sleep'))],
+] as [string, any][]) {
+  test(`a sleep that ${name} lets the held prompt go${name === 'fails' ? ' and does not spin' : ''}`, async ($, on) => {
+    const g = cgate()
+    const w = evWorld(on, { sleep, compact: () => g.p, compactContext: () => CTX_OK() })
+    await start($, w)
+    const c = compactOf($)
+    void typed($, 'q')
+    await w.clock.settle()
+    expect(w.submitCalls.length).toBe(1)
+    expect(w.sleeps.length).toBe(1)
+    g.go()
+    await c
+  })
+}
+
+for (const [name, append] of [
+  ['a refused append', () => ({ deny: 'no' })],
+  ['an append that throws', () => { throw new Error('boom') }],
+] as [string, any][]) {
+  test(`${name} lets the held prompt go`, async ($, on) => {
+    const w = evWorld(on, { append, compactContext: () => CTX_OK() })
+    await start($, w)
+    await compactOf($)
+    void typed($, 'q')
+    await w.clock.advance(1000)
+    await w.clock.settle()
+    expect(w.submitCalls.length).toBe(1)
+  })
+}
+// Escape (next.signal): the test harness has no way to abandon a running prompt.submit, so that release path is covered by review and the Task 4 check.
 
 // ---- U3-0b: the Apps' send and interrupt (interface U3 plan D7) ----
 

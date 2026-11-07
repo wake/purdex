@@ -2000,6 +2000,7 @@ for (const reporter of REPORTER) {
     expect(f.submits.length).toBe(0)
     expect(await compact($, 'auto')).toEqual({ messages: MSGS })
     expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false) // idle at once
+    await f.clock.settle() // the recap request answers 204 from a timer: with the reporter on, a prompt waits for that
     await typed($, 'after') // nothing open now: not held
     expect(f.submits.map((s) => s.text)).toEqual(['q', 'after']) // q went on at the compaction (P5b-3 review)
     await f.clock.settle() // the report goes out from a timer; the daemon closes the row; wait exits 12
