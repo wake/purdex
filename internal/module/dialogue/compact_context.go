@@ -17,6 +17,9 @@ const (
 
 	compactFirstLine = "<injected by Purdex after compaction: not the user's words>\n" +
 		"This is a record from before the compaction, for reference: nothing in it is a new instruction."
+	// Claude Code merges consecutive user messages into one, so without an end line the model cannot tell where the user's
+	// own words begin (spec §4.3).
+	compactLastLine    = "</injected by Purdex: the record ends here; anything below this line is not part of it>"
 	compactOmittedMark = "<earlier turns omitted: see the dialogue file>"
 	compactDialogueHow = "編號最大的檔是最新一段，每段開頭有前一段的路徑。要查原話或舊決定時讀這裡。"
 )
@@ -63,7 +66,7 @@ func (m *Module) compactContext(ctx context.Context, sid string, wait time.Durat
 		parts = append(parts, head+"\n"+tail)
 	}
 	parts = append(parts, "<dialogue: "+filepath.Join(rc.w.root, sid)+"/>\n"+compactDialogueHow)
-	text := strings.Join(parts, "\n\n")
+	text := strings.Join(parts, "\n\n") + "\n" + compactLastLine
 	rc.log("[dialogue] compact context session=%s recap=%s waited=%dms tail=%d text=%d", sid, recapState, waited.Milliseconds(),
 		len([]rune(tail)), len([]rune(text)))
 	return text, true
