@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.782] - 2026-11-07
+
+> **壓縮後，模型分得出哪句是使用者說的。** daemon、mod 有改：**部署 daemon 後要跑 `pdx setup`（兩台）**。SPA、wwd 都沒改：不用打包 Mac App、不重裝 wwd。依賴沒變，不用 `pnpm install`。先部署 daemon 再跑 `pdx setup`；順序反了也只是少一行結尾或不等待，不會出錯。自動接力開關、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`、閒置壓縮都沒動。
+
+### Fixed
+
+- **注入的文字加結尾（#3991）**：781 的注入只有開頭標記。Claude Code 把注入和使用者壓縮後的第一句併成一則送給模型，模型可能把使用者的話當成注入的舊紀錄而拒絕照做（實測 Haiku 多次如此）。daemon 組的文字最後加一行 `</injected by Purdex: the record ends here; anything below this line is not part of it>`。
+- **壓縮期間送出的提示等注入補上才送（#3991）**：從壓縮開始到注入補上或確定不補為止，`prompt.submit` 先等，平常多等約 1–1.6 秒。每次壓縮的等待在壓縮結束後最多 60 秒；按 Escape 立刻送出；任何錯誤都讓提示原樣送出。App 送來的提示同樣等注入補完才送；等超過 daemon 的 10 秒租約時，App 上那則的狀態會是「不確定」，跟之前在壓縮期間送出時一樣，不會重送。
+
+### Internal
+
+- 壓縮控制的 spec（`docs/specs/2026-11-07-compact-control-spec.md`）、Phase 1 與 Phase 2–5 的 plan、探針紀錄與觸發探針 mod（`docs/specs/assets/2026-11-07-compact-control/`），隨 #3991 進 main。
+- `mod-hooks` 有 3 條與 `tool.check` 有關的測試仍然失敗，跟這次改動無關，見 #3987。
+
 ## [1.0.0-alpha.781] - 2026-11-07
 
 > **壓縮後，agent 自動拿到 recap、之後的內容與對話檔位置。** daemon、mod、**SPA** 都有改：**部署 daemon 後要跑 `pdx setup`，這版要重新打包 Mac App，使用者要更新**。wwd 沒改，不重裝。依賴沒變，不用 `pnpm install`。先部署 daemon 再跑 `pdx setup`；順序反了也只是不注入，不會出錯。自動接力開關、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`、閒置壓縮都沒動。
