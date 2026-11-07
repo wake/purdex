@@ -3036,7 +3036,66 @@ test('compact-now waiting for a turn end that also triggers the auto compaction 
   await turnDone($, 't1')
   await w.clock.settle()
   expect(w.compactCalls.length).toBe(1)
-  expect(w.logs.some((l) => l.includes('compact now skipped: auto compaction'))).toBe(true)
+  expect(w.logs.some((l) => l.includes('compact now waits: auto compaction'))).toBe(true)
+})
+
+// A compaction that really ran (through the mod's session.compact hook) satisfies a waiting compact-now. (The harness gives a
+// $.session.compact() call from the mod no trigger, so onCompact only sees this one with a trigger named.)
+test('a compaction that ran while compact-now waits clears the request', async ($, on) => {
+  let go: () => void = () => {}
+  const gate = new Promise<any>((r) => { go = () => r({ messages: CMSGS }) })
+  let pct = 72
+  const g = gated(CJOB())
+  const w = autoWorld(on, { promptNext: g.fn, usage: () => USAGE_AT(144000, pct), compact: () => gate })
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1) // the auto one, still out; compact-now waits
+  go()
+  await w.clock.settle()
+  await compactOf($, 'manual')
+  expect(w.compactCalls.length).toBe(2)
+  pct = 10
+  await endTurn($, w, 't2')
+  expect(w.compactCalls.length).toBe(2)
+})
+
+// An auto tick that does not compact leaves the request for the next turn end.
+test('compact-now waits for an auto compaction that aborts because a turn started, and compacts at that turn end', async ($, on) => {
+  let pct = 72
+  const g = gated(CJOB())
+  const w = autoWorld(on, { promptNext: g.fn, usage: () => USAGE_AT(144000, pct) })
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await turnStart($, 't2') // before the auto tick fires: the engine would refuse it
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+  pct = 10 // so the second turn end triggers no auto compaction of its own
+  await turnDone($, 't2')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+})
+
+test('compact-now waits for an auto compaction that is skipped, and tries at the next turn end', async ($, on) => {
+  let pct = 72
+  const g = gated(CJOB())
+  const w = autoWorld(on, { promptNext: g.fn, usage: () => USAGE_AT(144000, pct), compact: () => ({ skip: 'no' }) })
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1) // the auto one, skipped beneath
+  pct = 10
+  await endTurn($, w, 't2')
+  expect(w.compactCalls.length).toBe(2) // compact-now's own try
 })
 
 test('an idle compact-now while an auto compaction call is out does not call again', async ($, on) => {

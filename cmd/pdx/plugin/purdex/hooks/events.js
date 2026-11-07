@@ -594,12 +594,14 @@ function pqCompact($) {
 }
 
 // The flag is consumed when the tick is scheduled: an aborted and a completed turn end for one turn must not compact twice.
+// An auto compaction in flight (the gate says so) is waited for instead: the flag stays set, and onCompact clears it when a compaction
+// really ran; an auto tick that aborts, skips or fails leaves it for the next turn end. A relay drops the request.
 function compactNowAtTurnEnd($) {
   if (!compactNowWanted) return
-  compactNowWanted = false
-  // Looked at now too, not only at the tick: an auto compaction scheduled at this same turn end has finished by the time a 0 ms tick runs,
-  // and compacting the context it just compacted is no use.
+  // Looked at now too, not only at the tick: an auto compaction scheduled at this same turn end has finished by the time a 0 ms tick runs.
   const why = compactNowGate()
+  if (why === 'auto compaction') { log($, 'compact now waits: ' + why); return }
+  compactNowWanted = false
   if (why) { log($, 'compact now skipped: ' + why); return }
   const gen = wb.gen
   $.clock.after(0, () => compactNowTick($, gen))
@@ -615,6 +617,7 @@ function compactNowTick($, gen) {
 async function compactNow($, gen) {
   if (wb.gen !== gen) { log($, 'compact now dropped: session changed'); return }
   const why = compactNowGate()
+  if (why === 'auto compaction') { compactNowWanted = true; log($, 'compact now waits: ' + why); return }
   if (why) { log($, 'compact now skipped: ' + why); return }
   try {
     const r = await $.session.compact({})
@@ -1097,6 +1100,7 @@ async function onCompact($, e, next) {
   try {
     const r = await next(e)
     ok = !(isObject(r) && r.skip !== undefined)
+    if (ok) compactNowWanted = false // a compaction that really ran (auto, manual or compact-now itself) satisfies pdx compact --now
     return r
   } finally {
     compactEnded($, e, ok)
