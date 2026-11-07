@@ -1,18 +1,29 @@
 package teammod
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 
+	"github.com/wake/purdex/internal/promptq"
 	"github.com/wake/purdex/internal/team"
 )
+
+// compactSubmitter is the prompt queue as this route sees it (promptq.Queue).
+type compactSubmitter interface {
+	SubmitCompact(ctx context.Context, sessionID string) (promptq.Result, error)
+}
 
 // handleMemberCompaction is POST /api/team/member-compaction: the caller's own local, active member only. Reset clears
 // the override; Set merges its non-nil fields into the current one; neither only reads.
 func (m *Module) handleMemberCompaction(w http.ResponseWriter, r *http.Request) {
 	var req team.MemberCompactionRequest
 	if !m.decodeBody(w, r, &req) {
+		return
+	}
+	if req.Now && (req.Reset || req.Set != nil) {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "now cannot be combined with set or reset", nil)
 		return
 	}
 	if req.Reset && req.Set != nil {
@@ -42,6 +53,10 @@ func (m *Module) handleMemberCompaction(w http.ResponseWriter, r *http.Request) 
 	}
 	if m.isRemoteRow(mr) {
 		m.writeErr(w, http.StatusConflict, team.ErrRemoteUnsupported, "a remote member's compaction settings cannot be changed from here", nil)
+		return
+	}
+	if req.Now {
+		m.compactNow(w, r, mr)
 		return
 	}
 	fail := func(err error) {
@@ -101,4 +116,48 @@ func (m *Module) memberRelayOpen(sessionID string) (team.RelayOp, bool, error) {
 		return op, open, err
 	}
 	return m.store.OpenRelayOpByNewSession(sessionID)
+}
+
+// compactNow is the `now` of the route: the member compacts now, or when its running turn ends. It writes nothing, so it takes no
+// createMu (the queue waits on the member's mod); a relay that starts right after only races a compaction, which is harmless.
+func (m *Module) compactNow(w http.ResponseWriter, r *http.Request, mr memberRow) {
+	op, open, err := m.memberRelayOpen(mr.SessionID)
+	if err != nil {
+		m.logf("[team] member compaction %s: %v", mr.SessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if open {
+		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "member " + mr.Ref + " is relaying; compact it after the relay", Op: &op})
+		return
+	}
+	var q compactSubmitter
+	if m.core != nil && m.core.Registry != nil {
+		if svc, ok := m.core.Registry.Get(promptq.Key); ok {
+			q, _ = svc.(compactSubmitter)
+		}
+	}
+	if q == nil {
+		m.writeErr(w, http.StatusConflict, team.ErrCompactFailed, "the prompt queue is not available", nil)
+		return
+	}
+	res, err := q.SubmitCompact(r.Context(), mr.SessionID)
+	switch {
+	case err == nil && res.Status == promptq.Accepted && (res.Reason == "now" || res.Reason == "turn_end"):
+	case err == nil && res.Status == promptq.Dropped && res.Reason == "unsupported_kind":
+		m.writeErr(w, http.StatusConflict, team.ErrCompactUnsupported, "the member's mod does not take a compact job; update the mod", nil)
+		return
+	default:
+		m.logf("[team] member compaction now %s: %+v %v", mr.SessionID, res, err)
+		m.writeErr(w, http.StatusConflict, team.ErrCompactFailed, "the member's mod did not take the compact job ("+res.Status+")", nil)
+		return
+	}
+	v, err := m.compactionView(mr.SessionID)
+	if err != nil {
+		m.logf("[team] member compaction %s: %v", mr.SessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role, switches or team.db unreadable; see the daemon log", nil)
+		return
+	}
+	mv := m.memberView(mr)
+	m.writeJSON(w, http.StatusOK, team.MemberCompactionView{Address: mv.Address, Ref: mv.Ref, CompactionView: v, Now: res.Reason})
 }

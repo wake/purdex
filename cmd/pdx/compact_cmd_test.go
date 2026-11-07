@@ -108,6 +108,34 @@ func TestCompactCmd_RefusalsExit13(t *testing.T) {
 	}
 }
 
+func TestCompactCmd_Now(t *testing.T) {
+	for now, want := range map[string]string{"now": "已叫 member 壓縮", "turn_end": "member 正在跑回合，這個回合結束時壓縮"} {
+		v := compactView(team.CompactionOverride{}, team.CompactionEffective{Managed: true})
+		v.Now = now
+		s := &compactStub{reply: v}
+		code, stdout, stderr := driveTeamCmd(t, runCompactCmd, s, "_m1m1m1", "--now")
+		if code != ExitOK || strings.TrimSpace(stdout) != want || len(s.bodies) != 1 ||
+			s.bodies[0] != `{"origin_inbox":"/tmp/cc-socks/1.sock","target":"_m1m1m1","now":true}` {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q bodies=%v", now, code, stdout, stderr, s.bodies)
+		}
+	}
+	s := &compactStub{reply: compactView(team.CompactionOverride{}, team.CompactionEffective{})}
+	for _, args := range [][]string{{"_m1m1m1", "--now", "--reset"}, {"_m1m1m1", "--now", "--auto", "on"}, {"_m1m1m1", "--now", "--threshold", "50"}, {"_m1m1m1", "--now", "--idle", "off"}} {
+		if code, _, stderr := driveTeamCmd(t, runCompactCmd, s, args...); code != ExitUsage || !strings.HasPrefix(stderr, "pdx compact: ") {
+			t.Errorf("%q: code=%d stderr=%q", args, code, stderr)
+		}
+	}
+	if len(s.bodies) != 0 {
+		t.Errorf("usage errors reached the daemon: %v", s.bodies)
+	}
+	for _, code := range []string{team.ErrRelayOpen, team.ErrCompactUnsupported, team.ErrCompactFailed} {
+		s := &compactStub{status: http.StatusConflict, reply: team.APIError{Error: code, Detail: "no"}}
+		if got, _, stderr := driveTeamCmd(t, runCompactCmd, s, "_m1m1m1", "--now"); got != ExitRefused || lastToken(stderr) != code {
+			t.Errorf("%s: code=%d stderr=%q", code, got, stderr)
+		}
+	}
+}
+
 func TestTeamCmd_CompactColumn(t *testing.T) {
 	mk := func(c *team.CompactionEffective) team.Member {
 		m := fakeMember(team.SpawnRequest{ID: "op-1", Cwd: "/w"})

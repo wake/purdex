@@ -2903,3 +2903,82 @@ test('a threshold raised before the timer runs stops the compaction', async ($, 
   await w.clock.settle()
   expect(w.compactCalls.length).toBe(0)
 })
+
+// ---- pdx compact --now: the daemon's compact job (PR 5b, Task 14) ----
+
+const CJOB = (extra: any = {}) => PJOB({ kind: 'compact', text: undefined, ...extra })
+const cWorld = (on: any, g: any, opts: Partial<W> = {}) => evWorld(on, { promptNext: g.fn, compact: () => ({ messages: CMSGS }), ...opts })
+const compactResult = (w: W) => pqResult(w)[0].body
+
+test('parsePromptJob knows the compact job', () => {
+  const r = parsePromptJob({ status: 200, text: JSON.stringify({ job: { id: 'pj-' + PJ, kind: 'compact', session_id: SID1 } }) })
+  expect(r).toEqual({ id: 'pj-' + PJ, kind: 'compact', sessionId: SID1, text: '' })
+})
+
+test('an idle session compacts once from a timer and answers now', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g)
+  await start($, w)
+  g.open()
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+  expect(compactResult(w)).toMatchObject({ status: 'accepted', reason: 'now' })
+})
+
+for (const reason of ['answer', 'aborted']) {
+  test('a running turn answers turn_end and compacts when it ends (' + reason + ')', async ($, on) => {
+    const g = gated(CJOB())
+    const w = cWorld(on, g)
+    await start($, w)
+    await turnStart($, 't1')
+    g.open()
+    await w.clock.settle()
+    expect(compactResult(w)).toMatchObject({ status: 'accepted', reason: 'turn_end' })
+    expect(w.compactCalls.length).toBe(0)
+    await turnDone($, 't1', { reason, isAborted: reason === 'aborted' })
+    await w.clock.settle()
+    expect(w.compactCalls.length).toBe(1)
+    await endTurn($, w, 't2') // wanted once only
+    expect(w.compactCalls.length).toBe(1)
+  })
+}
+
+test('a call refused because a turn started meanwhile is tried again at that turn end', async ($, on) => {
+  let n = 0
+  const g = gated(CJOB())
+  const w = cWorld(on, g, { compact: () => { if (++n === 1) throw new Error('a turn is running'); return { messages: CMSGS } } })
+  await start($, w)
+  g.open()
+  await turnStart($, 't1') // before the 0 ms timer
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+})
+
+test('a failed call is not tried again at the next turn end', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g, { compact: () => ({ skip: 'no' }) })
+  await start($, w)
+  g.open()
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+  await endTurn($, w, 't1')
+  expect(w.compactCalls.length).toBe(1)
+})
+
+test('a /clear after turn_end was promised does not compact the new session', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g)
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  await endTurn($, w, 't2')
+  expect(w.compactCalls.length).toBe(0)
+})

@@ -70,6 +70,7 @@ const pq = { loop: 0 }
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
 // acked, and droppedTotal counts the events this stream lost — never reset (spec §6.2).
+let compactNowWanted = false // pdx compact --now asked for a compaction at the end of the running turn (dropped when the session changes id)
 const ev = {
   on: false,
   sock: '',
@@ -459,6 +460,7 @@ async function pqRun($, job) {
     else if (job.kind === 'fill') out = await pqFill($, job)
     else if (job.kind === 'clear_if') out = await pqClearIf($, job)
     else if (job.kind === 'read') out = await pqRead($)
+    else if (job.kind === 'compact') out = pqCompact($)
     else out = await pqInterrupt($)
   } catch (err) {
     out = pqOut('dropped', job.kind === 'interrupt' ? 'not_running' : 'refused')
@@ -574,6 +576,32 @@ async function pqRead($) {
   return pqOut('accepted', '', text.length === cur.text.length ? { text } : { text, truncated: true })
 }
 
+// pqCompact (pdx compact --now): a running turn compacts when it ends (compactNowWanted), an idle session from a timer, so the report
+// goes out first and the engine's call never runs inside the job.
+function pqCompact($) {
+  if (ev.turnId) {
+    compactNowWanted = true
+    return pqOut('accepted', 'turn_end')
+  }
+  $.clock.after(0, () => compactNowTick($))
+  return pqOut('accepted', 'now')
+}
+
+function compactNowTick($) {
+  void compactNow($).catch((err) => log($, 'compact now failed: ' + String(err)))
+}
+
+// A call the engine refuses while a turn runs (by this mod's own turn tracking) waits for the next turn end; any other failure is only logged.
+async function compactNow($) {
+  compactNowWanted = false
+  try {
+    await $.session.compact({})
+  } catch (err) {
+    if (ev.turnId) compactNowWanted = true
+    else log($, 'compact now refused: ' + String(err))
+  }
+}
+
 // An interrupt aborts the running main turn.
 async function pqInterrupt($) {
   if (!ev.turnId) return pqOut('dropped', 'not_running')
@@ -673,6 +701,7 @@ async function startReporter($, e) {
   stopBeat()
   stopTeam()
   wb.gen += 1
+  compactNowWanted = false
   compactHoldDrop()
   ev.on = false
   ev.switching = false
@@ -714,6 +743,7 @@ async function sessionSwitch($, source) {
     const prev = ev.sid
     ev.sid = String(await $.session.id())
     wb.gen += 1 // a poll made under the old session id stops asking
+    compactNowWanted = false
     compactHoldDrop()
     ev.turnId = ''
     ev.asks.clear()
@@ -745,6 +775,7 @@ async function sessionEnd($, e) {
     stopBeat()
     stopTeam()
     wb.gen += 1
+    compactNowWanted = false
     compactHoldDrop()
   }
   enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
@@ -783,6 +814,7 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
+    if (compactNowWanted) $.clock.after(0, () => compactNowTick($))
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
@@ -799,6 +831,7 @@ function turnAborted($, turnId) {
   rememberClosed(turnId)
   ev.turnId = ''
   ev.asks.clear()
+  if (compactNowWanted) $.clock.after(0, () => compactNowTick($))
   enqueue($, 'turn.complete', { turn_id: turnId, reason: 'aborted', duration_ms: 0, aborted: true })
 }
 
