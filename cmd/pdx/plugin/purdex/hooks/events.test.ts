@@ -2879,3 +2879,14 @@ test('a /clear resets the floor: the new session compacts at low tokens', async 
   await endTurn($, w, 't3')
   expect(w.compactCalls.length).toBe(2)
 })
+
+test('a new session before the timer runs stops the compaction (the generation moved, the epoch did not)', async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  w.sid = SID2
+  await start($, w)
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+})
