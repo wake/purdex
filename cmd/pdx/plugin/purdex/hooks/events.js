@@ -67,6 +67,7 @@ const wb = { busy: false, again: false, scheduled: false, gen: 0, wait: 0 }
 // `loop` is the wb.gen it runs under (0: none), so a session end or switch ends it and the new session starts its own.
 const pq = { loop: 0 }
 
+let compactNowWanted = false // pdx compact --now asked for a compaction at the end of the running turn (dropped when the session changes id)
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
 // acked, and droppedTotal counts the events this stream lost — never reset (spec §6.2).
@@ -459,6 +460,7 @@ async function pqRun($, job) {
     else if (job.kind === 'fill') out = await pqFill($, job)
     else if (job.kind === 'clear_if') out = await pqClearIf($, job)
     else if (job.kind === 'read') out = await pqRead($)
+    else if (job.kind === 'compact') out = pqCompact($)
     else out = await pqInterrupt($)
   } catch (err) {
     out = pqOut('dropped', job.kind === 'interrupt' ? 'not_running' : 'refused')
@@ -574,6 +576,50 @@ async function pqRead($) {
   return pqOut('accepted', '', text.length === cur.text.length ? { text } : { text, truncated: true })
 }
 
+// The relay state machine lives in register.js (which imports this file): it hands over a probe once, at register time.
+let relayStateProbe = () => 'idle' // no probe set: no relay
+export function setRelayStateProbe(fn) { relayStateProbe = fn }
+
+// pqCompact (pdx compact --now): a running turn compacts when it ends (compactNowWanted), an idle session from a timer, so the report
+// goes out first and the engine's call never runs inside the job.
+function pqCompact($) {
+  if (ev.turnId) {
+    compactNowWanted = true
+    return pqOut('accepted', 'turn_end')
+  }
+  const gen = wb.gen
+  $.clock.after(0, () => compactNowTick($, gen))
+  return pqOut('accepted', 'now')
+}
+
+// The flag is consumed when the tick is scheduled: an aborted and a completed turn end for one turn must not compact twice.
+function compactNowAtTurnEnd($) {
+  if (!compactNowWanted) return
+  compactNowWanted = false
+  const gen = wb.gen
+  $.clock.after(0, () => compactNowTick($, gen))
+}
+
+function compactNowTick($, gen) {
+  void compactNow($, gen).catch((err) => log($, 'compact now failed: ' + String(err)))
+}
+
+// A call the engine refuses while a turn runs (by this mod's own turn tracking) waits for the next turn end; any other failure is only logged.
+// A tick belongs to the session (wb.gen) it was scheduled for, and yields to a relay: the session.compact hook cancels an op that is
+// beginning or awaiting, and the relay replaces the context anyway.
+async function compactNow($, gen) {
+  if (wb.gen !== gen) { log($, 'compact now dropped: session changed'); return }
+  const relay = relayStateProbe()
+  if (relay !== 'idle') { log($, 'compact now skipped: relay ' + relay); return }
+  try {
+    const r = await $.session.compact({})
+    if (r && r.skip !== undefined) log($, 'compact now skipped: ' + String(r.skip))
+  } catch (err) {
+    if (ev.turnId && wb.gen === gen) compactNowWanted = true
+    else log($, 'compact now refused: ' + String(err))
+  }
+}
+
 // An interrupt aborts the running main turn.
 async function pqInterrupt($) {
   if (!ev.turnId) return pqOut('dropped', 'not_running')
@@ -673,6 +719,7 @@ async function startReporter($, e) {
   stopBeat()
   stopTeam()
   wb.gen += 1
+  compactNowWanted = false
   compactHoldDrop()
   ev.on = false
   ev.switching = false
@@ -714,6 +761,7 @@ async function sessionSwitch($, source) {
     const prev = ev.sid
     ev.sid = String(await $.session.id())
     wb.gen += 1 // a poll made under the old session id stops asking
+    compactNowWanted = false
     compactHoldDrop()
     ev.turnId = ''
     ev.asks.clear()
@@ -745,6 +793,7 @@ async function sessionEnd($, e) {
     stopBeat()
     stopTeam()
     wb.gen += 1
+    compactNowWanted = false
     compactHoldDrop()
   }
   enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
@@ -783,6 +832,7 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
+    compactNowAtTurnEnd($) // events.js wraps register.js's hook: its relay decision for this turn end has settled
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
@@ -799,6 +849,7 @@ function turnAborted($, turnId) {
   rememberClosed(turnId)
   ev.turnId = ''
   ev.asks.clear()
+  compactNowAtTurnEnd($)
   enqueue($, 'turn.complete', { turn_id: turnId, reason: 'aborted', duration_ms: 0, aborted: true })
 }
 

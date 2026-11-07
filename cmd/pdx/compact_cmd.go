@@ -15,8 +15,9 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-const compactUsage = "usage: pdx compact <ref> [--auto on|off] [--threshold N] [--idle on|off] [--reset] [--config <path>]\n" +
-	"       (no flag: show the member's compaction settings; --reset clears the override and takes no other flag; N is 1-100)\n" +
+const compactUsage = "usage: pdx compact <ref> [--auto on|off] [--threshold N] [--idle on|off] [--reset | --now] [--config <path>]\n" +
+	"       (no flag: show the member's compaction settings; --reset clears the override and takes no other flag; N is 1-100;\n" +
+	"        --now compacts the member now, or when its running turn ends, and takes no other flag)\n" +
 	"       (<ref> is _xxxxxx, or an address from pdx team; only a member of your own team, on this host)"
 
 func runCompact(args []string) {
@@ -44,6 +45,7 @@ func runCompactCmd(ctx context.Context, args []string, getenv func(string) strin
 	autoV, idleV := fs.String("auto", "", ""), fs.String("idle", "", "")
 	thresholdV := fs.String("threshold", "", "")
 	reset := fs.Bool("reset", false, "")
+	now := fs.Bool("now", false, "")
 	pos, err := parseTeamFlags(fs, args)
 	var set team.CompactionOverride
 	if err == nil && (len(pos) != 1 || strings.TrimSpace(pos[0]) == "") {
@@ -69,11 +71,14 @@ func runCompactCmd(ctx context.Context, args []string, getenv func(string) strin
 	if err == nil && *reset && changes {
 		err = errors.New("--reset 不能和 --auto／--threshold／--idle 一起用")
 	}
+	if err == nil && *now && (*reset || changes) {
+		err = errors.New("--now 不能和 --auto／--threshold／--idle／--reset 一起用")
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx compact: %v\n%s\n", err, compactUsage)
 		return ExitUsage
 	}
-	req := team.MemberCompactionRequest{Target: pos[0], Reset: *reset}
+	req := team.MemberCompactionRequest{Target: pos[0], Reset: *reset, Now: *now}
 	if changes {
 		req.Set = &set
 	}
@@ -85,6 +90,14 @@ func runCompactCmd(ctx context.Context, args []string, getenv func(string) strin
 	var v team.MemberCompactionView
 	if _, err := client.Do(ctx, http.MethodPost, "/api/team/member-compaction", req, &v); err != nil {
 		return teamReportErr("compact", err, stderr)
+	}
+	if *now {
+		if v.Now == "turn_end" {
+			fmt.Fprintln(stdout, "member 正在跑回合，這個回合結束時壓縮")
+		} else {
+			fmt.Fprintln(stdout, "已叫 member 壓縮")
+		}
+		return ExitOK
 	}
 	fmt.Fprintf(stdout, "member %s [%s]\n生效  %s\n覆寫  %s\n", sanitizeCell(v.Address), sanitizeCell(v.Ref), compactEffectiveText(v.Effective), compactOverrideText(v.Override))
 	return ExitOK

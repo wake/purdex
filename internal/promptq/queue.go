@@ -35,6 +35,8 @@ const (
 	// KindNotice is a notice of the daemon to the session (lease v2 amendment A §2.10): submitted as a plugin message,
 	// not as the person's words, by a mod that announced CapLeaseNotice. At most once by key.
 	KindNotice = "notice"
+	// KindCompact asks the mod to compact the session now, or at the end of its running turn (pdx compact --now).
+	KindCompact = "compact"
 )
 
 // CapLeaseNotice is the capability a mod announces to take notice jobs (modevents.CapLeaseNoticeV1 spells the same).
@@ -44,7 +46,7 @@ const CapLeaseNotice = "lease.notice.v1"
 const MaxNoticeBytes = 4000
 
 // Wire format (daemon <-> mod). prompt/next answers {"job":{"id","kind","session_id","text"?}} with kind submit |
-// interrupt | fill | clear_if | read (text: submit, fill, clear_if). The mod reports with prompt/result
+// interrupt | fill | clear_if | read | compact (text: submit, fill, clear_if; compact accepts with reason now | turn_end). The mod reports with prompt/result
 // {"stream","job_id","status":"accepted|dropped|busy|unknown","reason"?,"filled_at"?,"text"?}: filled_at (unix ms, read from the
 // mod's clock right after a successful fill) on an accepted fill; text on an accepted read. Drop reasons of a fill:
 // session_changed, input_not_empty, dialog_open, no_composer, refused, fill_mismatch; of a clear_if: not_ours.
@@ -464,6 +466,12 @@ func (q *Queue) ClearIf(ctx context.Context, sessionID, text string) (Result, er
 	return q.transient(ctx, KindClearIf, sessionID, text)
 }
 
+// SubmitCompact asks the mod to compact the session now (accepted Reason "now") or when its running turn ends ("turn_end").
+// No ledger: a compaction twice is harmless. A mod that does not know the kind drops it as unsupported_kind.
+func (q *Queue) SubmitCompact(ctx context.Context, sessionID string) (Result, error) {
+	return q.transient(ctx, KindCompact, sessionID, "")
+}
+
 // Read asks the mod for the composer's text (accepted: Result.Text).
 func (q *Queue) Read(ctx context.Context, sessionID string) (Result, error) {
 	return q.transient(ctx, KindRead, sessionID, "")
@@ -663,6 +671,8 @@ func (q *Queue) Result(stream, jobID string, o Outcome) error {
 			}
 		case KindRead:
 			res.Text, res.Truncated = o.Text, o.Truncated
+		case KindCompact:
+			res.Reason = o.Reason
 		}
 		q.finish(e, res)
 	case Busy:

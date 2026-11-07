@@ -73,12 +73,14 @@ var remoteSpawnReasonExit = map[string]int{
 // 13 (spec §14). relay_open is a kill of a member mid-relay (P4-6 review).
 // Any other API code is exit 1.
 var teamRefusalCodes = map[string]bool{
-	team.ErrNotLead:          true,
-	team.ErrTeamFull:         true,
-	team.ErrCwdOutsideGrant:  true,
-	team.ErrNotYourMember:    true,
-	team.ErrRelayOpen:        true,
-	team.ErrRelayUnsupported: true, // pdx kill --handoff: a remote member, or a mod older than protocol 8 (RT-3c)
+	team.ErrNotLead:            true,
+	team.ErrTeamFull:           true,
+	team.ErrCwdOutsideGrant:    true,
+	team.ErrNotYourMember:      true,
+	team.ErrRelayOpen:          true,
+	team.ErrCompactUnsupported: true, // pdx compact --now: the member's mod is too old to take it
+	team.ErrCompactFailed:      true,
+	team.ErrRelayUnsupported:   true, // pdx kill --handoff: a remote member, or a mod older than protocol 8 (RT-3c)
 	// RT-1: the unattended refusal and a person token that is no good.
 	team.ErrUnattendedRefused:  true,
 	team.ErrPersonTokenInvalid: true,
