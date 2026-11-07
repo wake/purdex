@@ -15,7 +15,7 @@
 import { AGENT_ICON_VALUES } from './command-icons'
 import { trimLikeGo } from './go-trim'
 import { checkRelayPromptBody, RELAY_PROMPT_MAX_BYTES, type RelayPromptProblem } from './relay-prompt-check'
-import type { HostCommand, HostProject, QuickReply, RelaySwitches, ResumeTemplateOverrides } from './host-config-api'
+import type { CompactionDefaults, CompactionSet, HostCommand, HostProject, QuickReply, RelaySwitches, ResumeTemplateOverrides } from './host-config-api'
 
 /** Why a section shows less than the host stores. */
 export type HostConfigProblem =
@@ -35,6 +35,7 @@ export interface HostConfigFieldItems {
   resumeTemplates: ResumeTemplateOverrides
   quickReplies: QuickReply[]
   relay: RelaySwitches
+  compaction: CompactionDefaults
 }
 export type HostConfigField = keyof HostConfigFieldItems
 
@@ -46,6 +47,8 @@ export interface ParsedHostConfig {
   quickReplies?: ParsedCollection<QuickReply[]>
   /** Absent on a daemon that predates P5a. */
   relay?: ParsedCollection<RelaySwitches>
+  /** Absent on a daemon that predates compaction control. */
+  compaction?: ParsedCollection<CompactionDefaults>
 }
 
 type JsonObject = Record<string, unknown>
@@ -297,6 +300,33 @@ export function parseRelay(raw: unknown, hostId: string): ParsedCollection<Relay
   return { items: read, revision, problem: problemOf(raw, hostId, 'relay', dropped.length, 'relay') }
 }
 
+const DEFAULT_COMPACTION_SET: CompactionSet = { auto: true, threshold: 70, idle: true }
+
+function compactionSetOf(v: unknown): CompactionSet {
+  if (!isObject(v)) return DEFAULT_COMPACTION_SET
+  const th = v.threshold
+  return {
+    auto: typeof v.auto === 'boolean' ? v.auto : true,
+    threshold: typeof th === 'number' && Number.isInteger(th) && th >= 1 && th <= 100 ? th : 70,
+    idle: typeof v.idle === 'boolean' ? v.idle : true,
+  }
+}
+
+/** The daemon sends the built-in defaults for a never-written or unreadable row (`invalid` marks the latter). */
+export function parseCompaction(raw: unknown, hostId: string): ParsedCollection<CompactionDefaults> {
+  if (!isObject(raw)) {
+    warn(hostId, 'compaction', 'collection is not an object; reading the defaults')
+    return { items: { solo: DEFAULT_COMPACTION_SET, team: DEFAULT_COMPACTION_SET }, revision: 0, problem: { kind: 'shape' } }
+  }
+  const revision = revisionOf(raw, hostId, 'compaction')
+  const items = isObject(raw.items) ? raw.items : {}
+  return {
+    items: { solo: compactionSetOf(items.solo), team: compactionSetOf(items.team) },
+    revision,
+    problem: problemOf(raw, hostId, 'compaction', 0),
+  }
+}
+
 /** One parser per field: what a load, a PUT answer and a 409's `current` all go through. */
 export const parseHostConfigField: {
   [F in HostConfigField]: (raw: unknown, hostId: string) => ParsedCollection<HostConfigFieldItems[F]>
@@ -306,6 +336,7 @@ export const parseHostConfigField: {
   resumeTemplates: parseResumeTemplates,
   quickReplies: parseQuickReplies,
   relay: parseRelay,
+  compaction: parseCompaction,
 }
 
 /**
@@ -321,5 +352,6 @@ export function parseHostConfig(body: unknown, hostId: string): ParsedHostConfig
     resumeTemplates: parseResumeTemplates(body.resumeTemplates, hostId),
     quickReplies: body.quickReplies === undefined ? undefined : parseQuickReplies(body.quickReplies, hostId),
     relay: body.relay === undefined ? undefined : parseRelay(body.relay, hostId),
+    compaction: body.compaction === undefined ? undefined : parseCompaction(body.compaction, hostId),
   }
 }

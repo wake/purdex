@@ -14,6 +14,7 @@ import {
   type HostProject,
   type QuickReply,
   type RelaySwitches,
+  type CompactionDefaults,
   type ResumeTemplateOverrides,
 } from '../lib/host-config-api'
 import {
@@ -45,7 +46,11 @@ export interface HostConfigEntry {
   relay: RelaySwitches
   /** The daemon's GET carried a `relay` field (P5a+). */
   relaySupported: boolean
-  revisions: { projects: number; commands: number; resumeTemplates: number; quickReplies: number; relay: number }
+  /** The host's compaction defaults for solo sessions and teams (compaction control). */
+  compaction: CompactionDefaults
+  /** The daemon's GET carried a `compaction` field. */
+  compactionSupported: boolean
+  revisions: { projects: number; commands: number; resumeTemplates: number; quickReplies: number; relay: number; compaction: number }
   /**
    * #1489: each collection whose stored copy on the daemon was malformed, and
    * how. Its field above holds only what could be read; the section says what
@@ -57,6 +62,11 @@ export interface HostConfigEntry {
 
 export const DEFAULT_RELAY_SWITCHES: RelaySwitches = Object.freeze({ self_solo: true, self_lead: true, member_auto: true }) as RelaySwitches
 
+export const DEFAULT_COMPACTION: CompactionDefaults = Object.freeze({
+  solo: Object.freeze({ auto: true, threshold: 70, idle: true }),
+  team: Object.freeze({ auto: true, threshold: 70, idle: true }),
+}) as CompactionDefaults
+
 export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostConfigEntry {
   return {
     status,
@@ -67,7 +77,9 @@ export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostCon
     quickRepliesSupported: false,
     relay: DEFAULT_RELAY_SWITCHES,
     relaySupported: false,
-    revisions: { projects: 0, commands: 0, resumeTemplates: 0, quickReplies: 0, relay: 0 },
+    compaction: DEFAULT_COMPACTION,
+    compactionSupported: false,
+    revisions: { projects: 0, commands: 0, resumeTemplates: 0, quickReplies: 0, relay: 0, compaction: 0 },
     problems: {},
   }
 }
@@ -78,7 +90,7 @@ export const EMPTY_HOST_CONFIG: HostConfigEntry = Object.freeze(emptyHostConfigE
 type ConfigField = keyof HostConfigEntry['revisions']
 type Problems = HostConfigEntry['problems']
 
-const CONFIG_FIELDS: readonly ConfigField[] = ['projects', 'commands', 'resumeTemplates', 'quickReplies', 'relay']
+const CONFIG_FIELDS: readonly ConfigField[] = ['projects', 'commands', 'resumeTemplates', 'quickReplies', 'relay', 'compaction']
 
 function problemsOf(p: ParsedHostConfig): Problems {
   const out: Problems = {}
@@ -104,6 +116,7 @@ interface HostConfigState {
   saveResumeTemplates: (hostId: string, items: ResumeTemplateOverrides) => Promise<void>
   saveQuickReplies: (hostId: string, items: QuickReply[]) => Promise<void>
   saveRelay: (hostId: string, items: RelaySwitches) => Promise<void>
+  saveCompaction: (hostId: string, items: CompactionDefaults) => Promise<void>
   forget: (hostId: string) => void
 }
 
@@ -187,9 +200,10 @@ function writesOf(hostId: string): WriteCounts {
 }
 
 /** Where a field's `*Supported` flag lives, for the fields that have one. */
-const SUPPORTED_FLAG: Partial<Record<ConfigField, 'quickRepliesSupported' | 'relaySupported'>> = {
+const SUPPORTED_FLAG: Partial<Record<ConfigField, 'quickRepliesSupported' | 'relaySupported' | 'compactionSupported'>> = {
   quickReplies: 'quickRepliesSupported',
   relay: 'relaySupported',
+  compaction: 'compactionSupported',
 }
 
 /** `loaded` with each of `fields` — items, revision, problem, `*Supported` flag — as `now` holds it. */
@@ -292,12 +306,15 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
             quickRepliesSupported: p.quickReplies !== undefined,
             relay: p.relay?.items ?? DEFAULT_RELAY_SWITCHES,
             relaySupported: p.relay !== undefined,
+            compaction: p.compaction?.items ?? DEFAULT_COMPACTION,
+            compactionSupported: p.compaction !== undefined,
             revisions: {
               projects: p.projects.revision,
               commands: p.commands.revision,
               resumeTemplates: p.resumeTemplates.revision,
               quickReplies: p.quickReplies?.revision ?? 0,
               relay: p.relay?.revision ?? 0,
+              compaction: p.compaction?.revision ?? 0,
             },
             problems: problemsOf(p),
           }, get().byHost[hostId], saved))
@@ -330,6 +347,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     saveResumeTemplates: (hostId, items) => save(hostId, 'resume-templates', 'resumeTemplates', items),
     saveQuickReplies: (hostId, items) => save(hostId, 'quick-replies', 'quickReplies', items),
     saveRelay: (hostId, items) => save(hostId, 'relay', 'relay', items),
+    saveCompaction: (hostId, items) => save(hostId, 'compaction', 'compaction', items),
 
     forget: (hostId) => {
       // Dropping the entry is only half of it: an answer already in flight
