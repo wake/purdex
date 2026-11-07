@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, createEvent, waitFor, act, cleanup } from '@testing-library/react'
 import type { CompactionView, CompactionOverride } from '../../lib/team/compaction-api'
 
 const getCompaction = vi.fn()
@@ -123,5 +123,14 @@ describe('CompactionLine', () => {
     fireEvent.click(screen.getByTestId('compaction-discuss'))
     await screen.findByTestId('compaction-error')
     expect(pressed('compaction-dev')).toBe('true')
+  })
+
+  it('the threshold stepper and the idle switch keep the terminal focus (mousedown is default-prevented)', async () => {
+    await mount(view())
+    for (const id of ['compaction-threshold-plus', 'compaction-threshold-minus', 'compaction-idle']) {
+      const ev = createEvent.mouseDown(screen.getByTestId(id))
+      fireEvent(screen.getByTestId(id), ev)
+      expect(ev.defaultPrevented, id).toBe(true)
+    }
   })
 })

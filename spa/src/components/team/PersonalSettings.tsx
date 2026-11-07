@@ -7,7 +7,9 @@ import { TEAM_COLORS } from './team-display'
 import { keepFocus } from './panel-focus'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
-import type { PersonalGroup } from '../../lib/task-groups/personal'
+import { CompactionLine } from './CompactionLine'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import type { PersonalGroup, PersonalTarget } from '../../lib/task-groups/personal'
 import type { PersonalActions } from './usePersonalActions'
 
 interface Props {
@@ -16,14 +18,16 @@ interface Props {
   actions: PersonalActions
   /** Counts the requests to open the name field (a double-click on the capsule): each new value opens it once. */
   renameRequest: number
+  target: PersonalTarget
 }
 
 const ROW = 'flex items-center gap-2 px-2 min-h-7'
 const LABEL = 'w-14 flex-shrink-0 text-[11px] text-text-muted'
 const BTN = 'px-1.5 py-0.5 rounded text-[11px] border border-border-default text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-text-secondary'
 
-export function PersonalSettings({ group, rootKnown, actions, renameRequest }: Props) {
+export function PersonalSettings({ group, rootKnown, actions, renameRequest, target }: Props) {
   const t = useI18nStore((s) => s.t)
+  const compaction = useUnattendedStore((s) => s.byHost[target.hostId]?.compactionSupport) === 'yes' && target.agentType === 'cc' && !target.ended
   const order = useManualGroupsStore((s) => s.order)
   const groups = useManualGroupsStore((s) => s.groups)
   const [listOpen, setListOpen] = useState(false)
@@ -59,6 +63,7 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
 
   return (
     <div data-testid="personal-settings" className="border-t border-border-subtle py-1.5 flex flex-col gap-1">
+      {compaction && <CompactionLine hostId={target.hostId} sessionId={target.agentSessionId} />}
       <div className={ROW}>
         <span className={LABEL}>{t('personal.settings.group')}</span>
         <span className="relative min-w-0 flex-1">

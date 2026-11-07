@@ -15,6 +15,11 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 
+vi.mock('../../lib/team/compaction-api', () => ({
+  getCompaction: () => Promise.resolve({ role: 'none', override: { auto: null, threshold: null, idle: null }, effective: { managed: true, auto: true, threshold: 70, idle: true } }),
+  putCompaction: vi.fn(),
+}))
+
 vi.mock('./TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
@@ -122,5 +127,50 @@ describe('the settings block on the panel', () => {
       useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
     })
     expect(within(block()!).getByTestId('cap-value')).toHaveTextContent('5')
+  })
+})
+
+describe('the compaction line of the tab in front (spec §8)', () => {
+  const line = () => screen.queryByTestId('compaction-dev')
+  const yes = () => act(() => useUnattendedStore.getState().setCompactionSupport(HOST, 'yes'))
+  const seen = async () => { await screen.findByTestId('compaction-dev') }
+
+  it('a member\'s tab in front shows it (the lead-only settings gate does not apply)', async () => {
+    scene('ma')
+    yes()
+    mount()
+    await seen()
+    expect(block()).toBeNull()
+  })
+
+  it('the lead\'s tab shows it too', async () => {
+    scene()
+    yes()
+    mount()
+    await seen()
+  })
+
+  it('none without the capability, and none when no seat is in front', () => {
+    scene('ma')
+    mount()
+    expect(line()).toBeNull()
+    cleanup()
+    scene('x')
+    yes()
+    mount()
+    expect(screen.queryByTestId('team-panel')).toBeNull()
+    expect(line()).toBeNull()
+  })
+
+  it('a remote member has none', () => {
+    scene('ma')
+    yes()
+    act(() => {
+      const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
+      roster[0].members[0].host_id = 'other-daemon'
+      useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
+    })
+    mount()
+    expect(line()).toBeNull()
   })
 })

@@ -79,11 +79,15 @@ export function CompactionLine({ hostId, sessionId }: { hostId: string; sessionI
       </div>
       <div className={ROW}>
         <span className={LABEL}>{t('compaction.threshold')}</span>
-        <ThresholdStepper testId="compaction-threshold" label={t('compaction.threshold')} value={eff.threshold} disabled={!eff.auto}
-          onStep={(d) => save((c) => ({ ...c.override, threshold: clampThreshold((c.override.threshold ?? c.effective.threshold) + d) }))} />
+        <span onMouseDown={keepFocus}>
+          <ThresholdStepper testId="compaction-threshold" label={t('compaction.threshold')} value={eff.threshold} disabled={!eff.auto}
+            onStep={(d) => save((c) => ({ ...c.override, threshold: clampThreshold((c.override.threshold ?? c.effective.threshold) + d) }))} />
+        </span>
         <span className={LABEL}>{t('compaction.idle')}</span>
-        <ToggleSwitch testId="compaction-idle" label={t('compaction.idle')} checked={eff.idle}
-          onChange={(on) => save((c) => ({ ...c.override, idle: on }))} />
+        <span onMouseDown={keepFocus}>
+          <ToggleSwitch testId="compaction-idle" label={t('compaction.idle')} checked={eff.idle}
+            onChange={(on) => save((c) => ({ ...c.override, idle: on }))} />
+        </span>
       </div>
       {failedKey === key && <p data-testid="compaction-error" role="status" className="px-2 text-[11px] text-status-warning-text">{t('compaction.error')}</p>}
     </div>
