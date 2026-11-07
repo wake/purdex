@@ -63,7 +63,7 @@ type W = {
   sleeps: { argv: string[]; timeoutMs?: number }[]
   order: string[] // 'submit' (prompt.submit beneath the mod) and 'append' (session.append beneath), as they happened
   sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
-  usage?: (n: number) => any // session.usage: the whole answer; n counts the calls (default: 1000 tokens, 1 %)
+  usage?: (n: number) => any | Promise<any> // session.usage: the whole answer; n counts the calls (default: 1000 tokens, 1 %)
   compactCalls: string[] // the trigger each session.compact beneath the mod received
 }
 
@@ -130,7 +130,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   on('session.version', async () => ({ value: { version: '2.1.293', base: '2.1.293' } }))
   on('session.surfaces', async () => ({ value: ['terminal'] }))
   let usageN = 0
-  on('session.usage', async () => ({ value: w.usage ? w.usage(++usageN) : { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits: [] } }))
+  on('session.usage', async () => ({ value: w.usage ? await w.usage(++usageN) : { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits: [] } }))
   on('agent.list', async () => {
     if (w.agents === 'fail') throw new Error('agent list refused')
     return { value: typeof w.agents === 'function' ? await w.agents() : w.agents }
