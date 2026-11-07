@@ -194,7 +194,8 @@ function RecapItem({ hostId, sessionId, recap: r, open, onToggle, fresh }: { hos
     if (open) void useDialogueStore.getState().loadTurnSummaries(hostId, sessionId, { from: r.from_no, to: r.to_no })
   }, [open, hostId, sessionId, r.from_no, r.to_no])
   const turns = summariesInRange(entry, r.from_no, r.to_no)
-  const trigger = ['auto', 'open', 'manual'].includes(r.trigger) ? t(`recap.trigger.${r.trigger}`) : r.trigger
+  const key = r.trigger === 'every30' ? 'auto' : r.trigger // the daemon names the 30-turn trigger every30
+  const trigger = ['auto', 'open', 'manual', 'compact'].includes(key) ? t(`recap.trigger.${key}`) : r.trigger
   return (
     <div data-testid="recap-item" className="px-3 pt-2 pb-[9px] border-b border-border-subtle last:border-b-0">
       <button

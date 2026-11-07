@@ -3401,6 +3401,7 @@
   "recap.trigger.auto": "auto",
   "recap.trigger.open": "on open",
   "recap.trigger.manual": "manual",
+  "recap.trigger.compact": "on compaction",
   "recap.sec.done": "Done",
   "recap.sec.now": "Now",
   "recap.sec.decided": "Decided",
