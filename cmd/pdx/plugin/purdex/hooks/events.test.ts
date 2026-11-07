@@ -63,9 +63,11 @@ type W = {
   sleeps: { argv: string[]; timeoutMs?: number }[]
   order: string[] // 'submit' (prompt.submit beneath the mod) and 'append' (session.append beneath), as they happened
   sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
+  usage?: (n: number) => any // session.usage: the whole answer; n counts the calls (default: 1000 tokens, 1 %)
+  compactCalls: string[] // the trigger each session.compact beneath the mod received
 }
 
-const teamAnswer = (role: string, members = 0, label = ''): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label }) })
+const teamAnswer = (role: string, members = 0, label = '', compaction?: any): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label, ...(compaction === undefined ? {} : { compaction }) }) })
 
 // The daemon's answer to a batch it applied whole: the highest seq it holds.
 const ackAll = (body: any): Answer => ({ status: 200, text: JSON.stringify({ ack: body.events[body.events.length - 1].seq }) })
@@ -79,7 +81,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     model: () => ({ isAnswered: true, text: '{}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }), modelCalls: [],
     registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
     submit: (e: any) => ({ text: e.text }), submitCalls: [], composer: '', readCalls: [], fillCalls: [], abort: () => undefined, abortCalls: [],
-    ctxReqs: [], compactContext: () => ({ status: 204 }), appends: [], sleeps: [], order: [],
+    ctxReqs: [], compactContext: () => ({ status: 204 }), appends: [], sleeps: [], order: [], compactCalls: [],
     daemon: ackAll,
     bash: () => BASH_OK,
     compact: (e: any) => ({ messages: e.messages }),
@@ -127,7 +129,8 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   on('session.id', async () => ({ value: w.sid }))
   on('session.version', async () => ({ value: { version: '2.1.293', base: '2.1.293' } }))
   on('session.surfaces', async () => ({ value: ['terminal'] }))
-  on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits: [] } }))
+  let usageN = 0
+  on('session.usage', async () => ({ value: w.usage ? w.usage(++usageN) : { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits: [] } }))
   on('agent.list', async () => {
     if (w.agents === 'fail') throw new Error('agent list refused')
     return { value: typeof w.agents === 'function' ? await w.agents() : w.agents }
@@ -188,7 +191,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   on('classic.Stop', async () => ({}))
   on('session.end', async (_$: any, e: any) => ({ sessionId: e.sessionId }))
   on('session.measure', async (_$: any, e: any) => ({ changed: e.changed }))
-  on('session.compact', async (_$: any, e: any) => w.compact(e))
+  on('session.compact', async (_$: any, e: any) => { w.compactCalls.push(e.trigger); return w.compact(e) })
   on('tool.check', async () => ({ decision: w.decision }))
   on('tool.call', { tool: 'Bash' }, async ($: any, e: any) => w.bash(e, $))
   on('agent.spawn', async () => ({ agentId: 'ag-9', model: 'claude-haiku-4-5' }))
@@ -2601,4 +2604,149 @@ test('parseCompaction keeps a complete policy and nothing else', () => {
     { ...POL, threshold: 0 }, { ...POL, threshold: 101 }, { ...POL, threshold: 70.5 }, { ...POL, threshold: '70' }]) {
     expect(parseCompaction(bad)).toBeNull()
   }
+})
+
+// ---- compaction control: the mod compacts at a turn end over the threshold (PR 3, Task 7) ----
+
+const POLICY = (o: any = {}) => ({ managed: true, auto: true, threshold: 70, idle: true, ...o })
+const HELLO_OFF = JSON.stringify({ ok: true, role: 'none', self_relay: 'off', threshold: 70, min_growth: 20000 })
+const USAGE_AT = (tokens: number, percent?: number) => ({ startedAt: 0, context: { tokens, window: 200000, ...(percent === undefined ? {} : { percent }) }, rateLimits: [] })
+const pdxHello = (hello = HELLO_OFF) => (argv: string[]) => (argv[0] === 'relay' && argv[1] === 'hello' ? { exitCode: 0, stdout: hello } : { exitCode: 0, stdout: '{}' })
+const autoWorld = (on: any, opts: Partial<W> = {}) => evWorld(on, {
+  team: () => teamAnswer('none', 0, '', POLICY()), pdx: pdxHello(), usage: () => USAGE_AT(144000, 72), compact: () => ({ messages: CMSGS }), ...opts,
+})
+const endTurn = async ($: any, w: W, id: string, more: any = {}) => { await turnStart($, id); const r = await turnDone($, id, more); await w.clock.settle(); return r }
+
+test('at a turn end over the threshold the mod compacts once, after the hook returned', async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  expect(w.compactCalls).toEqual([])
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1) // the trigger the engine passes a plugin's $.session.compact() is not visible to the hook beneath (undefined here)
+})
+
+test('below the threshold nothing happens', async ($, on) => {
+  const w = autoWorld(on, { usage: () => USAGE_AT(100000, 69) })
+  await start($, w)
+  await endTurn($, w, 't1')
+  expect(w.compactCalls).toEqual([])
+})
+
+test('a percent that is missing does nothing', async ($, on) => {
+  const w = autoWorld(on, { usage: () => USAGE_AT(144000) })
+  await start($, w)
+  await endTurn($, w, 't1')
+  expect(w.compactCalls).toEqual([])
+})
+
+test('an aborted, refused or failed turn does not compact', async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  let n = 0
+  for (const reason of ['aborted', 'refused', 'error']) await endTurn($, w, 't' + ++n, { reason })
+  expect(w.compactCalls).toEqual([])
+})
+
+for (const [name, ans] of [
+  ['unmanaged', teamAnswer('none', 0, '', POLICY({ managed: false }))],
+  ['auto off', teamAnswer('none', 0, '', POLICY({ auto: false }))],
+  ['no compaction field', teamAnswer('none')],
+  ['bad compaction field', teamAnswer('none', 0, '', { auto: true })],
+  ['no team read at all', { status: 503, text: '' } as Answer],
+] as [string, Answer][]) {
+  test(name + ': nothing', async ($, on) => {
+    const w = autoWorld(on, { team: () => ans })
+    await start($, w)
+    await endTurn($, w, 't1')
+    expect(w.compactCalls).toEqual([])
+  })
+}
+
+test("a subagent's turn end does nothing", async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  await turnDone($, 'st-1', { agentId: 'ag-1' })
+  await w.clock.settle()
+  expect(w.compactCalls).toEqual([])
+})
+
+test('a relay under way wins', async ($, on) => {
+  const argvs: string[][] = []
+  const hello = pdxHello(JSON.stringify({ ok: true, role: 'none', self_relay: 'on', threshold: 70, min_growth: 20000 }))
+  const w = autoWorld(on, { team: () => teamAnswer('none', 0, '', POLICY({ managed: false })), pdx: (argv) => { argvs.push(argv); return hello(argv) } })
+  await start($, w)
+  await endTurn($, w, 't1')
+  expect(argvs.some((a) => a[0] === 'relay' && a[1] === 'begin')).toBe(true)
+  expect(w.compactCalls).toEqual([])
+})
+
+test('the floor stops a second compaction until 20,000 more tokens', async ($, on) => {
+  let tokens = 144000
+  const w = autoWorld(on, { usage: () => USAGE_AT(tokens, 72) })
+  await start($, w)
+  const counts: number[] = []
+  for (const [i, tk] of [144000, 150000, 169999, 170000].entries()) { // the first reading after the compaction (150000) is the floor
+    tokens = tk
+    await endTurn($, w, 't' + i)
+    counts.push(w.compactCalls.length)
+  }
+  expect(counts).toEqual([1, 1, 1, 2])
+})
+
+test('a refusal because a turn is running leaves no floor', async ($, on) => {
+  const w = autoWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await turnStart($, 't2') // a typed prompt's turn starts before the 0 ms timer: the engine refuses the call (a turn is running)
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(0)
+  await turnDone($, 't2')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1) // no floor was set: the same 144000 tokens still compact
+})
+
+for (const [name, fail] of [
+  ['another refusal', () => { throw new Error('nope') }],
+  ['a skip', () => ({ skip: 'no' })],
+] as [string, () => any][]) {
+  test(name + ' sets the floor', async ($, on) => {
+    let tokens = 144000
+    let n = 0
+    const w = autoWorld(on, { usage: () => USAGE_AT(tokens, 72), compact: () => (++n === 1 ? fail() : { messages: CMSGS }) })
+    await start($, w)
+    await endTurn($, w, 't1')
+    expect(w.compactCalls.length).toBe(1)
+    tokens = 163999
+    await endTurn($, w, 't2')
+    expect(w.compactCalls.length).toBe(1)
+    tokens = 164000
+    await endTurn($, w, 't3')
+    expect(w.compactCalls.length).toBe(2)
+  })
+}
+
+test('a second turn end while a compaction call is out does not call again', async ($, on) => {
+  let go: () => void = () => {}
+  const gate = new Promise<any>((r) => { go = () => r({ messages: CMSGS }) })
+  const w = autoWorld(on, { compact: () => gate })
+  await start($, w)
+  await endTurn($, w, 't1')
+  await endTurn($, w, 't2')
+  expect(w.compactCalls.length).toBe(1)
+  go()
+  await w.clock.settle()
+})
+
+test('a failed team read keeps the previous policy', async ($, on) => {
+  let ok = true
+  const w = autoWorld(on, { team: () => (ok ? teamAnswer('none', 0, '', POLICY()) : { status: 500, text: '{}' }) })
+  await start($, w)
+  ok = false
+  await w.clock.advance(15_000)
+  await w.clock.advance(15_000)
+  await endTurn($, w, 't1')
+  expect(w.compactCalls.length).toBe(1)
 })

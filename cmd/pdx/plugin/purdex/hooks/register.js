@@ -51,7 +51,7 @@
 // prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
-import { backgroundBusy, registerEvents } from './events.js'
+import { backgroundBusy, compactionPolicy, registerEvents } from './events.js'
 import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, parseTeamNames, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
@@ -128,6 +128,9 @@ const fresh = () => ({
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
   latchEpoch: 0, // bumped by everything that clears the latch (a reask, a /clear, a session reset): a begin answers 'paused' only for the epoch it was sent in
+  compactFloor: undefined, // tokens read right after the last compaction: the mod compacts again only at floor + COMPACT_FLOOR_GROWTH (undefined after a reload)
+  compactFloorPending: false, // a compaction ran: the next turn end's tokens become the floor
+  compactBusy: false, // an auto-compaction call is out (or scheduled)
   pausedLatch: false, // the daemon paused this session (409 paused_no_quota): no self ask until a reask control or the next session.start
   reaskSeen: [], // the ids of reask controls already taken, oldest first (MAX_REASKS_SEEN)
   reaskPending: '', // a reask that arrived while a turn ran or a relay was in progress: begun at the next turn end
@@ -721,6 +724,7 @@ async function maybeBegin($) {
     return
   }
   if (s.pausedLatch) return // the daemon paused this session: the +10 % gate alone would ask again, the latch does not
+  if (compactionPolicy()?.managed) return // managed = self relay is not on: the daemon would only refuse the begin, and the turn end's auto compaction needs the state idle
   if (!hasCSPRNG()) {
     if (!s.noCSPRNGLogged) {
       s.noCSPRNGLogged = true
@@ -1511,12 +1515,48 @@ function claimLater($) {
   later($, 0, () => claim($, gen))
 }
 
+// ---- auto compaction (compaction control): the mod compacts itself at a turn end over the session's threshold ----
+
+const COMPACT_FLOOR_GROWTH = 20_000
+
+// maybeAutoCompact runs at the end of a main turn, after the relay steps. It reads usage once; the compaction itself is called from a timer.
+async function maybeAutoCompact($, e) {
+  const p = compactionPolicy()
+  const live = () => !!p && p.managed && p.auto && e.reason === 'answer' && s.state === 'idle' && s.control.length === 0 && !s.pausedLatch && !s.compactBusy
+  if (!live() && !s.compactFloorPending) return
+  const u = (await $.session.usage()).context
+  if (s.compactFloorPending && u.tokens !== undefined) { s.compactFloor = u.tokens; s.compactFloorPending = false }
+  if (!live() || u.percent === undefined || u.percent < p.threshold) return
+  if (s.compactFloor !== undefined && !(u.tokens >= s.compactFloor + COMPACT_FLOOR_GROWTH)) return
+  s.compactBusy = true
+  const tokens = u.tokens
+  $.clock.after(0, () => { void autoCompactTick($, tokens) })
+}
+
+function autoCompactTick($, tokens) {
+  void autoCompact($, tokens).catch((err) => log($, 'auto compact failed: ' + String(err)))
+}
+
+// A refusal because a turn is running records nothing (the next turn end tries again); any other failure or a skip sets the floor to the tokens read.
+async function autoCompact($, tokens) {
+  try {
+    if (s.state !== 'idle' || s.turnRunning) return // a turn that started meanwhile: the engine would refuse, and the next turn end asks again
+    const r = await $.session.compact({})
+    if (r && r.skip !== undefined) s.compactFloor = tokens
+    else s.compactFloorPending = true // also set here: the hook above may not see the mod's own call
+  } catch (err) {
+    if (!String((err && err.message) || err).includes('a turn is running')) s.compactFloor = tokens
+  } finally {
+    s.compactBusy = false
+  }
+}
+
 // compactedAfter reports a compaction that really ran, after it did; compactedLater reports a compaction the mod did NOT intercept (P7-2, spec §8.5): from a timer, never awaited, so the
 // compaction never waits for it. Whatever the role (coordinator decision 12: the first hello may answer before the member
 // row exists), the daemon decides whether the lead is told (a member's auto one only). The session id is read in the timer.
 function compactedAfter($, e, result, trigger = e.trigger) {
   // only a compaction that ran: a hook beneath that skipped it (or threw, which never reaches here) reports nothing
-  if (!result || result.skip === undefined) compactedLater($, trigger)
+  if (!result || result.skip === undefined) { s.compactFloorPending = true; compactedLater($, trigger) }
   return result
 }
 
@@ -2011,6 +2051,7 @@ export function register(on) {
         armIdle($)
         if (!s.helloOK) s.idleWanted = true // hello has not answered yet: its answer arms the timer
       }
+      await maybeAutoCompact($, e)
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
     }
