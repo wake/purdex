@@ -12,6 +12,8 @@ type ModRead struct {
 	Role      string // lead | member | none (a remote member is a member)
 	Members   int
 	TeamLabel string
+	// Compaction is the session's effective compaction settings; nil when they could not be read (the mod keeps its last).
+	Compaction *CompactionEffective
 }
 
 // ModReader answers for the CURRENT session id only (a relay changes the lead's session id, and the team's with it). A

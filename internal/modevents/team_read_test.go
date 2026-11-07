@@ -52,6 +52,23 @@ func TestTeamRead_ShapeForLeadMemberAndNone(t *testing.T) {
 	}
 }
 
+// compaction is in the answer when set, and the key is absent when nil.
+func TestTeamRead_CompactionKeyOnlyWhenSet(t *testing.T) {
+	f := &fakeTeam{reads: map[string]TeamRead{
+		"a": {Role: "lead", Compaction: &TeamCompaction{Managed: true, Auto: true, Threshold: 70, Idle: true}},
+		"b": {Role: "member"},
+	}}
+	h := teamHandler(f)
+	rec := post(t, h, http.MethodGet, "/mod/v1/team?session_id=a", "")
+	if want := `{"role":"lead","members":0,"team_label":"","compaction":{"managed":true,"auto":true,"threshold":70,"idle":true}}`; rec.Body.String() != want {
+		t.Errorf("%s, want %s", rec.Body.String(), want)
+	}
+	rec = post(t, h, http.MethodGet, "/mod/v1/team?session_id=b", "")
+	if strings.Contains(rec.Body.String(), "compaction") {
+		t.Errorf("nil compaction leaked: %s", rec.Body.String())
+	}
+}
+
 func TestTeamRead_BadRequestsAndMethods(t *testing.T) {
 	f := &fakeTeam{}
 	h := teamHandler(f)
