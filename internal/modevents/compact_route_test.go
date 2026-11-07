@@ -96,6 +96,27 @@ func TestCompactContext_TextOr204(t *testing.T) {
 	}
 }
 
+// Only the known triggers reach the service; anything else (forged log lines, floods) becomes "unknown".
+func TestCompactContext_UnknownTriggerBecomesUnknown(t *testing.T) {
+	for trig, want := range map[string]string{
+		"":                               "",
+		"manual":                         "manual",
+		"auto":                           "auto",
+		"plugin":                         "plugin",
+		"plugin\n[dialogue] forged=true": "unknown",
+		strings.Repeat("x", 10*1024):     "unknown",
+	} {
+		c := &compactWB{fakeWB: &fakeWB{}, text: "t"}
+		body := fmt.Sprintf(`{"stream":%q,"session_id":%q,"trigger":%q}`, testStream, testSID, trig)
+		if rec := post(t, compactHandler(c), http.MethodPost, CompactContextPath, body); rec.Code != 200 {
+			t.Fatalf("%d", rec.Code)
+		}
+		if got, _ := c.trigger.Load().(string); got != want {
+			t.Errorf("trigger %.20q -> %q, want %q", trig, got, want)
+		}
+	}
+}
+
 func TestCompactContext_ServiceWithoutItIs503(t *testing.T) {
 	if rec := post(t, wbHandler(&fakeWB{}), http.MethodPost, CompactContextPath, compactBody(testStream, testSID)); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("service without it: %d", rec.Code)

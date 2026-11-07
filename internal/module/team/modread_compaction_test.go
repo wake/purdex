@@ -19,7 +19,7 @@ func TestModReader_CarriesTheEffectiveCompaction(t *testing.T) {
 	f.switches.set(hostconfig.RelaySwitches{})
 	sid := "sid-lead"
 	seedTeam(t, f.m.store, uid(9), sid, f.clock.Load())
-	got, err := modReader{f.m}.ModTeamRead(sid)
+	got, err := modReader{m: f.m}.ModTeamRead(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,11 +39,49 @@ func TestModReader_CompactionErrorLeavesItNilAndTheRestIntact(t *testing.T) {
 	f.switches.mu.Lock()
 	f.switches.err = errors.New("config down")
 	f.switches.mu.Unlock()
-	got, err := modReader{f.m}.ModTeamRead(sid)
+	got, err := modReader{m: f.m}.ModTeamRead(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Role != team.SeatLead || got.Compaction != nil {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestModReader_HostRowUnreadableMeansNoCompactionButAppKeepsDefaults(t *testing.T) {
+	f := newFixture(t)
+	sid := "sid-lead"
+	seedTeam(t, f.m.store, uid(9), sid, f.clock.Load())
+	f.compact.err = errors.New("row corrupt")
+	got, err := modReader{m: f.m}.ModTeamRead(sid)
+	if err != nil || got.Role != team.SeatLead || got.Compaction != nil {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+	if code, v, raw := f.compactionGet(sid); code != 200 || v.Effective.Threshold != hostconfig.DefaultCompaction.Team.Threshold {
+		t.Fatalf("App GET: %d %s", code, raw)
+	}
+}
+
+func TestModReader_MemberWithUnreadableSwitchesGetsNoCompaction(t *testing.T) {
+	f := newFixture(t)
+	sid := "sid-member"
+	f.makeMember(sid)
+	f.switches.mu.Lock()
+	f.switches.err = errors.New("config down")
+	f.switches.mu.Unlock()
+	got, err := modReader{m: f.m}.ModTeamRead(sid)
+	if err != nil || got.Role != team.SeatMember || got.Compaction != nil {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+}
+
+func TestModReader_RoleChangedBetweenTheTwoReadsMeansNoCompaction(t *testing.T) {
+	f := newFixture(t)
+	sid := "sid-lead"
+	seedTeam(t, f.m.store, uid(9), sid, f.clock.Load())
+	racing := func(string) (team.CompactionView, error) { return team.CompactionView{Role: roleNone}, nil }
+	got, err := modReader{m: f.m, view: racing}.ModTeamRead(sid)
+	if err != nil || got.Role != team.SeatLead || got.Compaction != nil {
+		t.Fatalf("got %+v err %v", got, err)
 	}
 }

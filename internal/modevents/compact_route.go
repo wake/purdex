@@ -58,6 +58,11 @@ func (h *handler) compactContext(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(compactContextDeadline))
 	ctx, cancel := h.pollContext(r)
 	defer cancel()
+	switch in.Trigger { // a free string would reach the log as is
+	case "", "manual", "auto", "plugin":
+	default:
+		in.Trigger = "unknown"
+	}
 	text, ok := svc.CompactContext(ctx, in.SessionID, in.Trigger)
 	if !ok || text == "" || ctx.Err() != nil {
 		w.WriteHeader(http.StatusNoContent)
