@@ -57,6 +57,12 @@ func TestCompactionOverride_UnknownSessionIsEmpty(t *testing.T) {
 
 func TestReportRelay_ClearedCopiesTheOverride(t *testing.T) {
 	for _, kind := range []team.RelayKind{team.RelayKindSelf, team.RelayKindMember} {
+		t.Run(string(kind), func(t *testing.T) { clearedCopies(t, kind) })
+	}
+}
+
+func clearedCopies(t *testing.T, kind team.RelayKind) {
+	{
 		s := openTestStore(t)
 		_ = s.SetCompactionOverride("old", team.CompactionOverride{Auto: ptr(false), Threshold: ptr(40)}, 1)
 		op := selfOp("op", "old", "_aaaaaa", 1000)
