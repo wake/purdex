@@ -112,6 +112,20 @@ func (p *Presence) atComputerLocked(now time.Time) bool {
 	return false
 }
 
+// PresenceState is AtComputer with the difference between "away" and "nobody says anything" (push.PresenceStateReader): known is true when at
+// least one unexpired v2 entry exists, and atComputer is then AtComputer's answer. A v1 entry is not a reading of the machine.
+func (p *Presence) PresenceState() (atComputer, known bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	for _, e := range p.entries {
+		if e.v2 && now.Before(e.expires) {
+			return p.atComputerLocked(now), true
+		}
+	}
+	return false, false
+}
+
 // V2Counts is the number of unexpired v2 entries and whether any says the person is at the computer: numbers only.
 func (p *Presence) V2Counts() (v2Entries, atComputer int) {
 	p.mu.Lock()
