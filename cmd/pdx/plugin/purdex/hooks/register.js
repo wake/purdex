@@ -51,7 +51,7 @@
 // prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
-import { backgroundBusy, compactionPolicy, registerEvents, setCompactNowGate } from './events.js'
+import { backgroundBusy, compactionPolicy, registerEvents, setSelfCompactHooks } from './events.js'
 import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, parseTeamNames, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
@@ -1534,28 +1534,40 @@ async function maybeAutoCompact($, e) {
   s.compactBusy = true
   const tokens = u.tokens
   const at = { gen: s.gen, epoch: s.compactEpoch, percent: u.percent }
-  $.clock.after(0, () => { void autoCompactTick($, tokens, at) })
+  s.autoCompactWanted = { ...at, tokens } // events.js takes it at this turn end (takeAuto) and makes the call, with the compaction steps
 }
 
-function autoCompactTick($, tokens, at) {
-  void autoCompact($, tokens, at).catch((err) => log($, 'auto compact failed: ' + String(err)))
-}
-
-// A refusal because a turn is running records nothing (the next turn end tries again); any other failure or a skip sets the floor to the tokens read.
-async function autoCompact($, tokens, at) {
-  try {
+// What events.js asks of register.js for the mod's own compactions (closures over s, no `$`: M-U1-2). The engine skips the calling
+// plugin's own session.compact hook, so events.js runs the compaction steps and calls these where that hook would have.
+const selfCompactHooks = {
+  gate: () => (s.state !== 'idle' ? 'relay ' + s.state : s.compactBusy ? 'auto compaction' : ''),
+  takeAuto: () => { const a = s.autoCompactWanted; s.autoCompactWanted = undefined; return a || null },
+  // the decision still holds when the call is made
+  autoLive: (a) => {
     const p = compactionPolicy()
-    if (!p || !p.managed || !p.auto || at.percent < p.threshold) return // a team read changed the policy (or raised the threshold) meanwhile
-    if (s.gen !== at.gen || s.compactEpoch !== at.epoch || s.compactFloorPending) return // a /clear or another compaction came first
-    if (s.state !== 'idle' || s.turnRunning) return // a turn that started meanwhile: the engine would refuse, and the next turn end asks again
-    const r = await $.session.compact({})
-    if (r && r.skip !== undefined) s.compactFloor = tokens
-    else s.compactFloorPending = true // also set here: the hook above may not see the mod's own call
-  } catch (err) {
-    if (!String((err && err.message) || err).includes('a turn is running')) s.compactFloor = tokens
-  } finally {
+    if (!p || !p.managed || !p.auto || a.percent < p.threshold) return false // a team read changed the policy (or raised the threshold) meanwhile
+    if (s.gen !== a.gen || s.compactEpoch !== a.epoch || s.compactFloorPending) return false // a /clear or another compaction came first
+    return s.state === 'idle' && !s.turnRunning // a turn that started meanwhile: the engine would refuse, and the next turn end asks again
+  },
+  // A refusal because a turn is running records nothing (the next turn end tries again); any other failure or a skip sets the floor to the tokens read.
+  autoDone: (a, outcome) => {
+    if (outcome === 'skipped' || outcome === 'failed') s.compactFloor = a.tokens
     s.compactBusy = false
-  }
+  },
+  // the session.compact hook's work for a main compaction that ran with the relay idle (the gate guarantees it), without `$`
+  selfCompacted: () => {
+    if (!s.interactive) return null // the hook does nothing for a headless session either
+    s.compactEpoch++
+    disarmIdle()
+    const clearStatus = !!(s.half && s.halfStatus)
+    s.half = undefined
+    s.halfStatus = false
+    s.lastAskPct = undefined
+    s.askEpoch++
+    s.askBusy = undefined
+    s.compactFloorPending = true
+    return { clearStatus, report: [s.pdx, 'relay', 'compacted', '--trigger', 'manual', ...(s.config ? ['--config', s.config] : [])] }
+  },
 }
 
 // compactedAfter reports a compaction that really ran, after it did; compactedLater reports a compaction the mod did NOT intercept (P7-2, spec §8.5): from a timer, never awaited, so the
@@ -1953,7 +1965,7 @@ export function register(on) {
   // The event reporter (interface U1 spec §6.5): unmatched on events this module does not
   // hook, matched on the ones it does; registered first, so its hooks wrap the relay's.
   registerEvents(on)
-  setCompactNowGate(() => (s.state !== 'idle' ? 'relay ' + s.state : s.compactBusy ? 'auto compaction' : ''))
+  setSelfCompactHooks(selfCompactHooks)
   registerGate(on) // tool.call{Bash} only: host load control for the calls the PATH shims cannot see
 
   // The member-relay control message (P6-6, M1): consumed whatever the state (codex finding 1), so the model never
@@ -2081,6 +2093,7 @@ export function register(on) {
     s.compactFloor = undefined
     s.compactFloorPending = false
     s.compactBusy = false
+    s.autoCompactWanted = undefined
     s.control = [] // a control message named the old session id: it is the old conversation's
     s.helloOK = false // nor does the old session's hello: the new one is sent below
     if (s.state === 'clearing' && p) {
