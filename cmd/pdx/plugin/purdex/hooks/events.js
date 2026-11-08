@@ -885,8 +885,6 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
-    const a = selfHooks.takeAuto() // register.js's decision at this turn end, taken before compact-now looks at the gate
-    if (a) $.clock.after(0, () => autoCompactTick($, a))
     compactNowAtTurnEnd($) // events.js wraps register.js's hook: its relay decision for this turn end has settled
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
@@ -1038,6 +1036,10 @@ async function onTurnStart($, e, next) {
 async function onTurnComplete($, e, next) {
   const r = await next(e)
   turnCompleted($, e)
+  if (!e.agentId) { // register.js's decision at this turn end, taken whether the reporter is on or not (else compactBusy stays true)
+    const a = selfHooks.takeAuto()
+    if (a) $.clock.after(0, () => autoCompactTick($, a))
+  }
   return r
 }
 

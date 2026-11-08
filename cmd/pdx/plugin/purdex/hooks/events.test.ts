@@ -3233,6 +3233,22 @@ test('an auto compaction that ran clears a waiting compact-now', async ($, on) =
   expect(w.compactCalls.length).toBe(1)
 })
 
+// With the reporter off (no mod_socket) register.js still decides at the turn end: the decision is taken and compactBusy released.
+test('the auto compaction runs and releases compactBusy with the reporter off', async ($, on) => {
+  let tokens = 144000
+  const w = autoWorld(on, { usage: () => USAGE_AT(tokens, 72) })
+  await start($, w) // the team read gives the policy ...
+  w.pdxJSON = PDX_JSON_OLD
+  await start($, w) // ... and a second session.start finds no socket: the reporter is off, the policy stays
+  await endTurn($, w, 't1')
+  expect(w.compactCalls.length).toBe(1)
+  tokens = 170000
+  await endTurn($, w, 't2') // takes the floor
+  tokens = 200000
+  await endTurn($, w, 't3')
+  expect(w.compactCalls.length).toBe(2)
+})
+
 // compactBusy never stays true: a later turn end over the floor compacts again whatever the first one did.
 for (const [name, compact, floorHolds] of [
   ['skipped', () => ({ skip: 'no' }), true],
