@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.784] - 2026-11-08
+
+> **mod 自己觸發的壓縮也會注入 recap。** 只改 mod：**部署 daemon 後要跑 `pdx setup`（兩台）**（mod 嵌在 pdx 執行檔裡）。SPA、wwd 都沒改：不打包 Mac App、不重裝 wwd。依賴沒變。
+
+### Fixed
+
+- **mod 觸發的壓縮沒有注入（#4005）**：783 起平常的自動壓縮與 `pdx compact --now` 都由 Purdex mod 呼叫 `$.session.compact()`，而 Claude Code 對這種呼叫會跑所有 plugin 的 `session.compact` hook，唯獨呼叫的 plugin 自己的不跑。結果這些壓縮沒有 recap 注入、壓縮期間沒擋提示、daemon 沒收到 compact-context 請求（log 沒有 `trigger=plugin`）、沒回報 `pdx relay compacted`，mod 的接力狀態也沒更新。現在 mod 自己發起的壓縮會自己跑完同一套步驟。手動 `/compact`、閒置壓縮、安全網壓縮原本就正常，不受影響。
+
 ## [1.0.0-alpha.783] - 2026-11-08
 
 > **壓縮改由 Purdex 決定：在回合結束時壓，每個 session 可以分「討論」與「開發」。** daemon、mod、**SPA** 都有改：**部署 daemon 後要跑 `pdx setup`（兩台），這版要重新打包 Mac App，使用者要更新**。wwd 沒改（只改了 `.wwd/tasks.toml`），不重裝。依賴沒變，不用 `pnpm install`。新 mod 配舊 daemon 讀不到設定就不介入；新 daemon 配舊 mod，多的欄位沒人讀。**兩台 `~/.claude/settings.json` 的 `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 要在部署時拿掉**（先問使用者、先備份），否則 Claude Code 仍會在 70% 自己壓縮，回合中也照壓；拿掉後已在跑的 session 要重開才生效。
