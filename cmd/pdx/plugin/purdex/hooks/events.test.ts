@@ -3156,3 +3156,98 @@ test('a /clear after turn_end was promised does not compact the new session', as
   await endTurn($, w, 't2')
   expect(w.compactCalls.length).toBe(0)
 })
+
+// ---- the mod's own compactions go through the compaction steps (784) ----
+// The engine runs a $.session.compact() of a plugin through every hook but that plugin's own, so the mod runs the steps itself.
+
+const planted = (w: W) => w.ctxReqs.map((c) => c.trigger)
+
+test('the turn-end auto compaction asks for the recap as trigger plugin and appends it', async ($, on) => {
+  const w = autoWorld(on, { compactContext: () => CTX_OK('RECAP') })
+  await start($, w)
+  await endTurn($, w, 't1')
+  expect(w.compactCalls.length).toBe(1)
+  expect(planted(w)).toEqual(['plugin'])
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('RECAP')])
+})
+
+test('a prompt typed during the turn-end auto compaction waits for the recap', async ($, on) => {
+  const g = cgate()
+  const w = autoWorld(on, { compact: () => g.p, compactContext: () => CTX_OK('RECAP') })
+  await start($, w)
+  await endTurn($, w, 't1')
+  void typed($, 'my words')
+  await w.clock.advance(100)
+  expect(w.submitCalls).toEqual([])
+  g.go()
+  await w.clock.advance(999)
+  expect(w.submitCalls).toEqual([])
+  await w.clock.advance(1)
+  await w.clock.settle()
+  expect(w.order).toEqual(['append', 'submit'])
+})
+
+test('an idle compact-now asks for the recap as trigger plugin and appends it', async ($, on) => {
+  const g = gated(CJOB())
+  const w = cWorld(on, g, { compactContext: () => CTX_OK('RECAP') })
+  await start($, w)
+  g.open()
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+  expect(planted(w)).toEqual(['plugin'])
+  await w.clock.advance(1000)
+  expect(w.appends).toEqual([APPENDED('RECAP')])
+})
+
+test('an own compaction that ran is reported as manual and sets the floor', async ($, on) => {
+  const argvs: string[][] = []
+  const w = autoWorld(on, { pdx: (argv) => { argvs.push(argv); return pdxHello()(argv) } })
+  await start($, w)
+  await endTurn($, w, 't1')
+  await w.clock.settle()
+  const rep = argvs.filter((a) => a[0] === 'relay' && a[1] === 'compacted')
+  expect(rep.length).toBe(1)
+  expect(rep[0].slice(0, 6)).toEqual(['relay', 'compacted', '--session', SID1, '--trigger', 'manual'])
+  await endTurn($, w, 't2') // same usage: the floor is taken from it, no new compaction
+  expect(w.compactCalls.length).toBe(1)
+})
+
+test('an auto compaction that ran clears a waiting compact-now', async ($, on) => {
+  let go: () => void = () => {}
+  const gate = new Promise<any>((r) => { go = () => r({ messages: CMSGS }) })
+  let pct = 72
+  const g = gated(CJOB())
+  const w = autoWorld(on, { promptNext: g.fn, usage: () => USAGE_AT(144000, pct), compact: () => gate })
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.compactCalls.length).toBe(1)
+  go()
+  await w.clock.settle()
+  pct = 10
+  await endTurn($, w, 't2')
+  expect(w.compactCalls.length).toBe(1)
+})
+
+// compactBusy never stays true: a later turn end over the floor compacts again whatever the first one did.
+for (const [name, compact, floorHolds] of [
+  ['skipped', () => ({ skip: 'no' }), true],
+  ['failed', () => { throw new Error('boom') }, true],
+] as [string, () => any, boolean][]) {
+  test('an auto compaction ' + name + ' leaves it free to compact again', async ($, on) => {
+    let tokens = 144000
+    const w = autoWorld(on, { usage: () => USAGE_AT(tokens, 72), compact: compact as any })
+    await start($, w)
+    await endTurn($, w, 't1')
+    expect(w.compactCalls.length).toBe(1)
+    await endTurn($, w, 't2') // same tokens
+    expect(w.compactCalls.length).toBe(floorHolds ? 1 : 2)
+    tokens = 170000
+    await endTurn($, w, 't3')
+    expect(w.compactCalls.length).toBe(floorHolds ? 2 : 3)
+  })
+}

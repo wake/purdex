@@ -49,6 +49,7 @@ const MONITORS_MAX = 64 // monitor ids kept at once; one more drops the oldest
 const ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']) // tools that wait on the person by themselves
 const TIMEOUT = Symbol('timeout')
 const HOLD_SLEEP = ['/bin/sleep', '5'] // the compact hold's own `$` call: local, it asks the daemon nothing
+const SELF_REPORT_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack, as register.js's CALL_TIMEOUT_MS
 const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const TEAM_URL = 'http://pdx/mod/v1/team' // GET ?session_id=<sid> on the same socket (TI-5a)
 const TEAM_MS = 15_000 // how often the lead's member count is read
@@ -576,10 +577,54 @@ async function pqRead($) {
   return pqOut('accepted', '', text.length === cur.text.length ? { text } : { text, truncated: true })
 }
 
-// The relay state machine and the auto compaction live in register.js (which imports this file): it hands over a gate once, at register
-// time, a closure (no `$`) that answers '' to go ahead or why compact-now must yield (a relay in progress, an auto compaction in flight).
-let compactNowGate = () => '' // no gate set: nothing in the way
-export function setCompactNowGate(fn) { compactNowGate = fn }
+// The relay state machine and the auto compaction decision live in register.js (which imports this file): it hands over its hooks once, at
+// register time, closures that take no `$` (M-U1-2). gate answers '' to go ahead or why compact-now must yield (a relay in progress, an
+// auto compaction in flight); takeAuto returns (and clears) the turn-end auto compaction decision; autoLive says whether it still holds;
+// autoDone settles it; selfCompacted does register's per-compaction bookkeeping and returns { clearStatus, report: argv } or null (argv is the
+// whole `pdx relay compacted …` process argv without --session, which is added here).
+const NO_SELF_HOOKS = { gate: () => '', takeAuto: () => null, autoLive: () => false, autoDone: () => {}, selfCompacted: () => null }
+let selfHooks = NO_SELF_HOOKS
+export function setSelfCompactHooks(hooks) { selfHooks = { ...NO_SELF_HOOKS, ...hooks } }
+const compactNowGate = () => selfHooks.gate()
+
+// selfCompact is the mod's own compaction (main conversation, trigger plugin). The engine skips the calling plugin's own hooks, so the
+// compaction steps (recap, hold, events, register's bookkeeping) run here. A rejection propagates: the caller decides what it means.
+async function selfCompact($) {
+  const r = await onCompact($, { trigger: 'plugin' }, () => $.session.compact({}))
+  if (r && r.skip !== undefined) return r
+  const done = selfHooks.selfCompacted()
+  if (done) {
+    if (done.clearStatus) $.ui.status(undefined)
+    const sid = ev.sid || String(await $.session.id())
+    $.clock.after(0, () => { void selfReport($, done.report, sid).catch((err) => log($, 'relay compacted failed: ' + String(err))) })
+  }
+  return r
+}
+
+async function selfReport($, argv, sid) {
+  const r = await $.process.run([...argv.slice(0, 3), '--session', sid, ...argv.slice(3)], { timeoutMs: SELF_REPORT_TIMEOUT_MS })
+  if (r.exitCode !== 0) log($, 'relay compacted failed (exit ' + r.exitCode + ')')
+}
+
+// The turn-end auto compaction: register.js decided at this turn end, the call is made from a timer here.
+function autoCompactTick($, a) {
+  void autoCompactRun($, a).catch((err) => log($, 'auto compact failed: ' + String(err)))
+}
+
+async function autoCompactRun($, a) {
+  let outcome = 'failed'
+  try {
+    if (!selfHooks.autoLive(a)) outcome = 'aborted'
+    else {
+      const r = await selfCompact($)
+      outcome = r && r.skip !== undefined ? 'skipped' : 'ran'
+    }
+  } catch (err) {
+    outcome = String((err && err.message) || err).includes('a turn is running') ? 'turn' : 'failed'
+  } finally {
+    selfHooks.autoDone(a, outcome)
+  }
+}
 
 // pqCompact (pdx compact --now): a running turn compacts when it ends (compactNowWanted), an idle session from a timer, so the report
 // goes out first and the engine's call never runs inside the job.
@@ -620,7 +665,7 @@ async function compactNow($, gen) {
   if (why === 'auto compaction') { compactNowWanted = true; log($, 'compact now waits: ' + why); return }
   if (why) { log($, 'compact now skipped: ' + why); return }
   try {
-    const r = await $.session.compact({})
+    const r = await selfCompact($)
     if (r && r.skip !== undefined) log($, 'compact now skipped: ' + String(r.skip))
   } catch (err) {
     if (ev.turnId && wb.gen === gen) compactNowWanted = true
@@ -840,6 +885,8 @@ function turnCompleted($, e) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
+    const a = selfHooks.takeAuto() // register.js's decision at this turn end, taken before compact-now looks at the gate
+    if (a) $.clock.after(0, () => autoCompactTick($, a))
     compactNowAtTurnEnd($) // events.js wraps register.js's hook: its relay decision for this turn end has settled
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
