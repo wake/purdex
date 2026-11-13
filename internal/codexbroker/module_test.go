@@ -47,6 +47,8 @@ func TestModule_StartStop_NoOp(t *testing.T) {
 	if err := m.Init(nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
+	// Init wires the real host scanner: keep Start's first auto sweep from scanning and applying against this machine's brokers.
+	m.sweepHandler.ApplyDisabled = "test"
 	ctx := context.Background()
 	if err := m.Start(ctx); err != nil {
 		t.Errorf("Start error = %v", err)
