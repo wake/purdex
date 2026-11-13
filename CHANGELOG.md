@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.785] - 2026-11-13
+
+> **daemon 會自動清掉工作目錄已經不在的 codex broker。** 只改 daemon：部署新 binary、重啟兩台即可，**不用跑 `pdx setup`**（mod 沒改）。SPA、wwd 都沒改：不打包 Mac App、不重裝 wwd。依賴沒變。
+
+### Fixed
+
+- **codex broker 越積越多、把主機記憶體吃光（#668、#4007）**：codex review 留下的背景 broker 不會自己結束。11-13 air26 累積了 99 個，連同子行程約 1170 個、swap 15 GB，wwd 判成記憶體警戒、重型名額歸零，只有 air26 能跑的測試卡了 75 分鐘。P2（#813）的判定一直判得出它們沒人用，但沒有定時觸發，而且「不是 Purdex 開的不殺」的保護把全部都擋掉了。現在 daemon 啟動時與之後每 10 分鐘自動清一次，只多放行一種：工作目錄（絕對路徑）隔 60 秒以上兩次確認都不存在、沒有進行中的工作、30 分鐘內沒有新結果、閒置滿 30 分鐘。audit 理由記為 `workspace_gone`，daemon log 有一行摘要。手動 `POST /api/codex/brokers/sweep` 的行為不變。工作目錄還在、但開它的 session 已結束的 broker 不清（每個目錄最多一份）。
+
 ## [1.0.0-alpha.784] - 2026-11-08
 
 > **mod 自己觸發的壓縮也會注入 recap。** 只改 mod：**部署 daemon 後要跑 `pdx setup`（兩台）**（mod 嵌在 pdx 執行檔裡）。SPA、wwd 都沒改：不打包 Mac App、不重裝 wwd。依賴沒變。
