@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -212,6 +213,11 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, h.evaluate(ctx, brokers, mode, brokerKey, false))
+}
+
+// evaluate runs the decision + kill loop shared by HandleSweep and AutoSweep.
+func (h *SweepHandler) evaluate(ctx context.Context, brokers []BrokerRecord, mode, brokerKey string, auto bool) SweepResponse {
 	resp := SweepResponse{
 		DryRun:    mode == "dry-run",
 		Evaluated: []BrokerDecision{},
@@ -226,7 +232,12 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 		opts.E1Tracker = h.E1Tracker
 	}
 
-	for _, rec := range brokers {
+	for i, rec := range brokers {
+		// Auto only: stop at the deadline; the next run picks up the rest.
+		if auto && ctx.Err() != nil {
+			resp.Errors = append(resp.Errors, fmt.Sprintf("sweep deadline reached: %d brokers not evaluated", len(brokers)-i))
+			break
+		}
 		if brokerKey != "" && rec.Key != brokerKey {
 			continue
 		}
@@ -249,6 +260,10 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 			// combination. Round-3 finding #1: operator override does
 			// NOT bypass alive-protection.
 			shouldKill = false
+		case auto && isForeign && decision.OverrideE1 && filepath.IsAbs(rec.Cwd):
+			// Auto sweep: E1 (cwd confirmed gone twice) is the only foreign kill it takes.
+			shouldKill = true
+			auditReason = "workspace_gone"
 		case brokerKey == "" && isForeign:
 			// Mass-kill safety: unfiltered apply NEVER kills foreign.
 			shouldKill = false
@@ -299,7 +314,7 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 		resp.Evaluated = append(resp.Evaluated, BrokerDecision{Broker: rec, Decision: decision})
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // acquireLocks implements the lock-acquisition matrix in plan §4 task Q.
