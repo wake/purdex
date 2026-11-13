@@ -216,6 +216,22 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.evaluate(ctx, brokers, mode, brokerKey, false))
 }
 
+// AutoSweep runs one unfiltered apply under the auto rule (spec §2.2). ran is false when apply is disabled.
+func (h *SweepHandler) AutoSweep(ctx context.Context) (resp SweepResponse, ran bool, err error) {
+	if h.ApplyDisabled != "" {
+		return SweepResponse{}, false, nil
+	}
+	if err := lockWriteCtx(ctx, &h.globalApplyMu); err != nil {
+		return SweepResponse{}, false, err
+	}
+	defer h.globalApplyMu.Unlock()
+	brokers, err := h.ScanFn(ctx)
+	if err != nil {
+		return SweepResponse{}, false, err
+	}
+	return h.evaluate(ctx, brokers, "apply", "", true), true, nil
+}
+
 // evaluate runs the decision + kill loop shared by HandleSweep and AutoSweep.
 func (h *SweepHandler) evaluate(ctx context.Context, brokers []BrokerRecord, mode, brokerKey string, auto bool) SweepResponse {
 	resp := SweepResponse{

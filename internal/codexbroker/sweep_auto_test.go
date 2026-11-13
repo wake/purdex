@@ -98,3 +98,34 @@ func TestEvaluate_Auto_RealEvalDecision_WorkspaceGone(t *testing.T) {
 		}
 	}
 }
+func TestAutoSweep_ApplyDisabled(t *testing.T) {
+	h, _, scan := autoHandler(BrokerRecord{Key: "k"}, DecisionResult{})
+	h.ApplyDisabled = "quarantine_load_failed"
+	_, ran, err := h.AutoSweep(context.Background())
+	if ran || err != nil || scan.calls.Load() != 0 {
+		t.Errorf("ran=%v err=%v scans=%d", ran, err, scan.calls.Load())
+	}
+}
+
+func TestAutoSweep_KillsForeign(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", Cwd: "/gone"}
+	h, killer, _ := autoHandler(rec, DecisionResult{Kill: true, OverrideE1: true, Reason: "foreign_quarantine"})
+	resp, ran, err := h.AutoSweep(context.Background())
+	if !ran || err != nil || len(resp.Applied) != 1 {
+		t.Fatalf("ran=%v err=%v resp=%+v", ran, err, resp)
+	}
+	if n, _ := killer.snapshot(); n != 1 {
+		t.Errorf("killed %d", n)
+	}
+}
+
+func TestAutoSweep_LockBusy(t *testing.T) {
+	h, _, scan := autoHandler(BrokerRecord{Key: "k"}, DecisionResult{})
+	h.globalApplyMu.Lock()
+	defer h.globalApplyMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, _, err := h.AutoSweep(ctx); err == nil || scan.calls.Load() != 0 {
+		t.Errorf("err=%v scans=%d", err, scan.calls.Load())
+	}
+}
