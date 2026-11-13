@@ -47,6 +47,8 @@ func TestModule_StartStop_NoOp(t *testing.T) {
 	if err := m.Init(nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
+	// Init wires the real host scanner: keep Start's first auto sweep from scanning and applying against this machine's brokers.
+	m.sweepHandler.ApplyDisabled = "test"
 	ctx := context.Background()
 	if err := m.Start(ctx); err != nil {
 		t.Errorf("Start error = %v", err)
@@ -373,5 +375,65 @@ func TestEvalDecision_Production_ActiveRPCThread_NoKill(t *testing.T) {
 	}
 	if !dec.Predicates.A {
 		t.Errorf("expected predicate A=true with active thread on production dialer; got A=false ADetail=%q", dec.Predicates.ADetail)
+	}
+}
+
+func TestModule_AutoSweepLoop(t *testing.T) {
+	scan := &fakeScanner{}
+	m := &Module{
+		sweepHandler: newSweepHandlerForTest(scan, &fakeKiller{}, &stubDecisionEvaluator{}, emptyRegistry{}, &QuarantineFile{Version: 1}),
+		autoEvery:    20 * time.Millisecond,
+		autoBudget:   time.Second,
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for scan.calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := scan.calls.Load(); n < 2 {
+		t.Fatalf("scans = %d, want >= 2", n)
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	n := scan.calls.Load()
+	time.Sleep(100 * time.Millisecond)
+	if scan.calls.Load() != n {
+		t.Errorf("scans kept running after Stop")
+	}
+}
+
+func TestModule_StartStop_NilSweepHandler(t *testing.T) {
+	m := &Module{}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if m.cancel != nil || m.done != nil {
+		t.Errorf("goroutine state set without a sweep handler")
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModule_Stop_HonoursItsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	h := newSweepHandlerForTest(&fakeScanner{}, &fakeKiller{}, &stubDecisionEvaluator{}, emptyRegistry{}, &QuarantineFile{Version: 1})
+	h.ScanFn = func(context.Context) ([]BrokerRecord, error) { <-release; return nil, nil } // ignores ctx, like a kill in flight
+	m := &Module{sweepHandler: h, autoEvery: time.Hour, autoBudget: time.Hour}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	if err := m.Stop(ctx); err == nil {
+		t.Fatal("Stop returned nil while the sweep was still running")
+	}
+	if d := time.Since(begin); d > time.Second {
+		t.Errorf("Stop took %v, want about its 50ms deadline", d)
 	}
 }
