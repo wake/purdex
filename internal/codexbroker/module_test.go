@@ -417,3 +417,23 @@ func TestModule_StartStop_NilSweepHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestModule_Stop_HonoursItsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	h := newSweepHandlerForTest(&fakeScanner{}, &fakeKiller{}, &stubDecisionEvaluator{}, emptyRegistry{}, &QuarantineFile{Version: 1})
+	h.ScanFn = func(context.Context) ([]BrokerRecord, error) { <-release; return nil, nil } // ignores ctx, like a kill in flight
+	m := &Module{sweepHandler: h, autoEvery: time.Hour, autoBudget: time.Hour}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	if err := m.Stop(ctx); err == nil {
+		t.Fatal("Stop returned nil while the sweep was still running")
+	}
+	if d := time.Since(begin); d > time.Second {
+		t.Errorf("Stop took %v, want about its 50ms deadline", d)
+	}
+}

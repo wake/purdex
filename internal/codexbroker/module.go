@@ -316,14 +316,21 @@ func (m *Module) autoSweepOnce(ctx context.Context, budget time.Duration) {
 		len(killed), killed, len(resp.Quarantined), resp.Quarantined, len(resp.Errors), resp.Errors)
 }
 
-// Stop implements core.Module. Stops the auto sweep loop and waits for it.
-func (m *Module) Stop(_ context.Context) error {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-		m.cancel, m.done = nil, nil
+// Stop implements core.Module. Stops the auto sweep loop and waits for it, but no longer than ctx: a kill sequence in flight
+// does not watch the run's context.
+func (m *Module) Stop(ctx context.Context) error {
+	if m.cancel == nil {
+		return nil
 	}
-	return nil
+	cancel, done := m.cancel, m.done
+	m.cancel, m.done = nil, nil
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // loadQuarantineFromPath populates m.quarantine from disk and reports any
