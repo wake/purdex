@@ -30,7 +30,10 @@
 
 | 條件 | 結果 | audit reason |
 |---|---|---|
-| auto ∧ `decision.Kill` ∧ foreign ∧ `decision.OverrideE1` | 殺 | `workspace_gone` |
+| auto ∧ `decision.Kill` ∧ foreign ∧ `decision.OverrideE1` ∧ `filepath.IsAbs(rec.Cwd)` | 殺 | `workspace_gone` |
+
+絕對路徑條件：cwd 取自 broker argv 的 `--cwd`，沒有檢查是不是絕對路徑；相對路徑（或字面的 `~`）會以 daemon 的工作目錄去
+stat，得到假的 ENOENT。
 
 其餘列不變：
 
@@ -45,9 +48,12 @@ E1 的定義沿用 P2：工作目錄 `os.Stat` 明確回 ENOENT，且同一 brok
 
 ### 2.3 預算用完就停
 
-sweep 迴圈在處理每個 broker 前檢查 ctx：已過期就停止（剩下的不評估、不殺），在 `Errors` 記一筆
-`sweep deadline reached: N brokers not evaluated`。手動與 auto 都適用。理由：過期的 ctx 會讓 predicate A 的 RPC 立刻失敗，
-只剩 state.json 當依據，保護變弱。
+**只有 auto**：sweep 迴圈在處理每個 broker 前檢查 ctx，已過期就停止（剩下的不評估、不殺），在 `Errors` 記一筆
+`sweep deadline reached: N brokers not evaluated`，剩下的留給下一輪。理由：過期的 ctx 會讓 predicate A 的 RPC 立刻失敗，
+只剩 state.json 當依據，保護變弱。手動 HTTP 路徑行為完全不變。
+
+auto 持有 `globalApplyMu` 寫鎖期間（最長約 3 分鐘，加上進行中那個 KillSequence 不看 ctx 的約 12 秒），手動請求會照舊回
+503 `sweep busy` 加 `Retry-After`。
 
 ## 3. 不做什麼
 
@@ -59,6 +65,9 @@ sweep 迴圈在處理每個 broker 前檢查 ctx：已過期就停止（剩下�
 
 - **外接碟沒掛**：`~/Workspace` 卸載時所有 worktree 都會 ENOENT。兩次觀察後，閒置滿 30 分鐘、沒有新鮮結果的 broker 會被清。
   後果只是下次用 codex 要重新暖機；結果檔在 `~/.claude/plugins/data`（內建碟），不受影響。可接受。
+- **E1 狀態不連續**（已知限制）：`E1Tracker` 只在 broker 被評估時更新；一個 broker 若在中間幾輪沒被評估（auto 預算用完、
+  被隔離、某次 scan 沒出現），舊的第一次觀察會保留，下一次 ENOENT 就直接成立，不是嚴格的「連續兩次」。誤觸的代價仍受
+  `decision.Kill` 的存活保護限制（閒置滿 30 分鐘、無新鮮結果、無進行中工作），不另外處理。
 - **誤殺進行中的 job**：受 `decision.Kill` 的存活保護擋；KillSequence Step 0 會重驗 (pid, lstart, cmdline)，不符就轉 E2 隔離。
 
 ## 5. 驗收

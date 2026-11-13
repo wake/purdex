@@ -9,17 +9,24 @@ TDD：每個 task 先寫會紅的測試再實作；每個 task 一個 commit。
    `func (h *SweepHandler) evaluate(ctx context.Context, brokers []BrokerRecord, mode, brokerKey string, auto bool) SweepResponse`；
    `HandleSweep` 改呼叫 `evaluate(ctx, brokers, mode, brokerKey, false)`，其餘（method、mode 驗證、ApplyDisabled、timeout、鎖、scan、writeJSON）不動。
 2. kill 判斷 switch 在 `case brokerKey == "" && isForeign:` **之前**加：
-   `case auto && isForeign && decision.OverrideE1: shouldKill = true; auditReason = "workspace_gone"`。
+   `case auto && isForeign && decision.OverrideE1 && filepath.IsAbs(rec.Cwd): shouldKill = true; auditReason = "workspace_gone"`。
    `!decision.Kill` 那列維持在最前面（存活保護優先）。
-3. 迴圈每輪開頭：`if ctx.Err() != nil` → 在 `resp.Errors` 加 `fmt.Sprintf("sweep deadline reached: %d brokers not evaluated", 剩餘數)` 後 `break`。
-   剩餘數＝這輪起尚未處理、且符合 brokerKey 過濾的筆數。
+3. **只在 auto 時**，迴圈每輪開頭：`if auto && ctx.Err() != nil` → 在 `resp.Errors` 加
+   `fmt.Sprintf("sweep deadline reached: %d brokers not evaluated", 剩餘數)` 後 `break`。剩餘數＝這輪起尚未處理的筆數。
+   手動路徑（auto=false）不檢查，行為與現在相同。
 
 測試（`sweep_test.go`，沿用 `newSweepHandlerForTest`、`fakeScanner`、`fakeKiller`、`stubDecisionEvaluator`；registry 用空的讓它是 foreign）：
-- auto ∧ Kill ∧ foreign ∧ OverrideE1 → killer 被叫、key 在 `Applied`、`Evaluated[i].Decision.Reason == "workspace_gone"`。
+- auto ∧ Kill ∧ foreign ∧ OverrideE1 ∧ 絕對 cwd → killer 被叫、key 在 `Applied`、`Evaluated[i].Decision.Reason == "workspace_gone"`。
+- auto ∧ Kill ∧ foreign ∧ OverrideE1 ∧ 相對 cwd（例如 `worktrees/x`）→ 不殺。
 - auto ∧ Kill ∧ foreign ∧ ¬OverrideE1 → 不殺。
 - auto ∧ ¬Kill ∧ foreign ∧ OverrideE1 → 不殺。
 - 手動 HTTP 未過濾 apply ∧ Kill ∧ foreign ∧ OverrideE1 → 不殺（守住舊行為）。
-- ctx 已取消時呼叫 `evaluate`（2 筆）→ 不叫 EvalFn、不殺、`Errors` 含 `2 brokers not evaluated`。
+- auto、ctx 已取消時呼叫 `evaluate`（2 筆）→ 不叫 EvalFn、不殺、`Errors` 含 `2 brokers not evaluated`；
+  同樣情況 auto=false → 照舊評估兩筆（守住手動行為）。
+- 接線測試：用真的 `EvalDecision`（`BaseDecisionOpts` 填 fake FS／Lister／Dialer，讓 A、B、C 都是 false、idle 已過期；
+  可參考 decision_test.go 既有的 fake），先對 handler 的 `E1Tracker` 用 `Observe(rec, time.Now().Add(-2*time.Minute))`
+  種下第一次觀察，rec 帶 `AnomalyCwdMissing` 與絕對 cwd，再跑 `AutoSweep` → 被殺、reason `workspace_gone`。
+  沒種第一次觀察 → 不殺。若 fake 湊不出來，回報原因，不要改 EvalDecision 的簽名。
 - 既有 sweep 測試全部照舊通過。
 
 ## T2 — `AutoSweep`（`sweep.go`）
