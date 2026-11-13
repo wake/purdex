@@ -375,3 +375,43 @@ func TestEvalDecision_Production_ActiveRPCThread_NoKill(t *testing.T) {
 		t.Errorf("expected predicate A=true with active thread on production dialer; got A=false ADetail=%q", dec.Predicates.ADetail)
 	}
 }
+
+func TestModule_AutoSweepLoop(t *testing.T) {
+	scan := &fakeScanner{}
+	m := &Module{
+		sweepHandler: newSweepHandlerForTest(scan, &fakeKiller{}, &stubDecisionEvaluator{}, emptyRegistry{}, &QuarantineFile{Version: 1}),
+		autoEvery:    20 * time.Millisecond,
+		autoBudget:   time.Second,
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for scan.calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := scan.calls.Load(); n < 2 {
+		t.Fatalf("scans = %d, want >= 2", n)
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	n := scan.calls.Load()
+	time.Sleep(100 * time.Millisecond)
+	if scan.calls.Load() != n {
+		t.Errorf("scans kept running after Stop")
+	}
+}
+
+func TestModule_StartStop_NilSweepHandler(t *testing.T) {
+	m := &Module{}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if m.cancel != nil || m.done != nil {
+		t.Errorf("goroutine state set without a sweep handler")
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -121,7 +121,19 @@ type Module struct {
 	// 503 with that reason. Operator clears the situation by deleting the
 	// .bak rename and restarting the daemon.
 	quarantineDegraded bool
+
+	// Auto sweep loop (spec 2026-11-13). Zero durations use the defaults.
+	autoEvery, autoBudget time.Duration
+	cancel                context.CancelFunc
+	done                  chan struct{}
 }
+
+const (
+	// DefaultAutoSweepEvery is the interval between automatic sweeps.
+	DefaultAutoSweepEvery = 10 * time.Minute
+	// DefaultAutoSweepBudget caps one automatic sweep run.
+	DefaultAutoSweepBudget = 3 * time.Minute
+)
 
 // New returns an unconfigured Module. Call Init before RegisterRoutes.
 func New() *Module {
@@ -248,15 +260,71 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	}
 }
 
-// Start implements core.Module. P2 has no background work — the audit
-// pruner + 30s tick land in P3.
-func (m *Module) Start(_ context.Context) error {
-	log.Println("[codexbroker] inventory + sweep endpoint enabled")
+// Start implements core.Module. Runs the auto sweep once, then every autoEvery, until Stop.
+func (m *Module) Start(ctx context.Context) error {
+	if m.sweepHandler == nil {
+		log.Println("[codexbroker] inventory + sweep endpoint enabled")
+		return nil
+	}
+	every, budget := m.autoEvery, m.autoBudget
+	if every <= 0 {
+		every = DefaultAutoSweepEvery
+	}
+	if budget <= 0 {
+		budget = DefaultAutoSweepBudget
+	}
+	log.Printf("[codexbroker] inventory + sweep endpoint + auto sweep every %s enabled", every)
+	runCtx, cancel := context.WithCancel(ctx)
+	m.cancel, m.done = cancel, make(chan struct{})
+	go func(done chan struct{}) {
+		defer close(done)
+		m.autoSweepOnce(runCtx, budget)
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-t.C:
+				m.autoSweepOnce(runCtx, budget)
+			}
+		}
+	}(m.done)
 	return nil
 }
 
-// Stop implements core.Module. Nothing to clean up.
-func (m *Module) Stop(_ context.Context) error { return nil }
+// autoSweepOnce runs one budgeted auto sweep and logs anything it did.
+func (m *Module) autoSweepOnce(ctx context.Context, budget time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	resp, ran, err := m.sweepHandler.AutoSweep(ctx)
+	if err != nil {
+		log.Printf("[codexbroker] auto sweep: %v", err)
+	}
+	if !ran || (len(resp.Applied) == 0 && len(resp.Errors) == 0 && len(resp.Quarantined) == 0) {
+		return
+	}
+	reasons := map[string]string{}
+	for _, e := range resp.Evaluated {
+		reasons[e.Broker.Key] = e.Decision.Reason
+	}
+	killed := make([]string, 0, len(resp.Applied))
+	for _, k := range resp.Applied {
+		killed = append(killed, k+"("+reasons[k]+")")
+	}
+	log.Printf("[codexbroker] auto sweep: killed %d %v, quarantined %d %v, errors %d %v",
+		len(killed), killed, len(resp.Quarantined), resp.Quarantined, len(resp.Errors), resp.Errors)
+}
+
+// Stop implements core.Module. Stops the auto sweep loop and waits for it.
+func (m *Module) Stop(_ context.Context) error {
+	if m.cancel != nil {
+		m.cancel()
+		<-m.done
+		m.cancel, m.done = nil, nil
+	}
+	return nil
+}
 
 // loadQuarantineFromPath populates m.quarantine from disk and reports any
 // fail-closed condition (PR review finding D).
